@@ -1,0 +1,40 @@
+name: rush_leftarm_desired_pose_only
+
+image_shape: [3, 240, 320]
+dataset_path: /home/jy/diffusion_policy/data/260518_0136/diffusion_plug_desired_pose_only20_2.hdf5
+
+shape_meta: &shape_meta
+  obs:
+    image0:   # Head camera
+      shape: [3, 240, 320]
+      type: rgb
+    robot_pose_L:
+      shape: [3]
+      type: low_dim
+    robot_quat_L:
+      shape: [4]
+      type: low_dim
+      rotation_rep: rotation_6d
+  action: 
+    shape: [9] # desired_pose_9d: trans(3) + 6d_rotation(6)
+    rotation_rep: rotation_6d
+
+pose_repr: &pose_repr
+  obs_pose_repr: abs
+  action_pose_repr: relative
+
+env_runner:
+  _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
+
+dataset:
+  _target_: diffusion_policy.dataset.bae_robomimic_replay_image_dataset.BaeRobomimicReplayDataset
+  shape_meta: *shape_meta
+  dataset_path: ${task.dataset_path}
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  use_cache: True
+  seed: 42
+  val_ratio: 0.00
+  pose_repr: *pose_repr

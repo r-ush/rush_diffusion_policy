@@ -1,0 +1,534 @@
+#!/home/vision/anaconda3/envs/robodiff/bin/python
+
+# 실행코드
+# python bae_eval_real_robot_rightarm_hand_with_wrench_encoder.py --input data/outputs/260330_erase_and_trash/checkpoints/epoch=0900-train_loss=0.001.ckpt --output data/results
+"""
+Usage:
+(robodiff)$ python eval_real_robot.py -i <ckpt_path> -o <save_dir> --robot_ip <ip_of_ur5>
+
+================ Human in control ==============
+Robot movement:
+Move your SpaceMouse to move the robot EEF (locked in xy plane).
+Press SpaceMouse right button to unlock z axis.
+Press SpaceMouse left button to enable rotation axes.
+
+Recording control:
+Click the opencv window (make sure it's in focus).
+Press "C" to start evaluation (hand control over to policy).
+Press "Q" to exit program.
+
+================ Policy in control ==============
+Make sure you can hit the robot hardware emergency-stop button quickly! 
+
+Recording control:
+Press "S" to stop evaluation and gain control back.
+"""
+
+# %%
+import time
+from multiprocessing.managers import SharedMemoryManager
+import click
+import cv2
+import numpy as np
+import torch
+import dill
+import hydra
+import pathlib
+import skvideo.io
+from omegaconf import OmegaConf
+import scipy.spatial.transform as st
+from diffusion_policy.real_world.bae_real_env_rightarm_hand_with_wrench_encoder import DualarmRealEnv   # 새로 만듬
+from diffusion_policy.common.precise_sleep import precise_wait
+from diffusion_policy.real_world.real_inference_util import (
+    get_real_obs_resolution, 
+    get_real_obs_dict,
+    get_real_relative_obs_dict,
+    get_abs_action_from_relative)
+from diffusion_policy.model.common.pose_util import mat_to_rot6d
+from diffusion_policy.common.pytorch_util import dict_apply
+from diffusion_policy.workspace.base_workspace import BaseWorkspace
+from diffusion_policy.policy.base_image_policy import BaseImagePolicy
+
+
+OmegaConf.register_new_resolver("eval", eval, replace=True)
+
+#####
+def summarize_cross_attention(attn_info, tag: str = ""):
+    if not attn_info:
+        print(f"{tag}[ATTN] no attention data")
+        return
+
+    for layer_item in attn_info:
+        w = layer_item.get('cross_attn', None)
+        if w is None:
+            print(f"{tag}[ATTN] layer={layer_item.get('layer')} cross_attn=None")
+            continue
+        print(
+            f"{tag}[ATTN] layer={layer_item.get('layer')} "
+            f"shape={tuple(w.shape)} "
+            f"mean={w.mean().item():.6f} max={w.max().item():.6f} min={w.min().item():.6f}"
+        )
+
+
+def summarize_condition_token_influence(
+    attn_info,
+    cond_token_names,
+    tag: str = "",
+    reduce_layers: str = "mean",
+):
+    """Summarize influence of each condition token on actions.
+
+    Expects cross-attention weights shaped like (B, T_action, S_cond).
+    Prints per-token total (sum across action steps) and per-action-step argmax token.
+
+    Note: attention weight is a *soft routing* signal. It's not a gradient-based attribution.
+    """
+    if not attn_info:
+        print(f"{tag}[COND] no attention data")
+        return
+
+    # collect weights for layers that have them
+    layer_ws = []
+    for layer_item in attn_info:
+        w = layer_item.get('cross_attn', None)
+        if w is None:
+            continue
+        layer_ws.append(w)
+
+    if len(layer_ws) == 0:
+        print(f"{tag}[COND] no cross-attn weights present")
+        return
+
+    # (L, B, T, S)
+    w_stack = torch.stack(layer_ws, dim=0)
+
+    if reduce_layers == "mean":
+        w = w_stack.mean(dim=0)
+    elif reduce_layers == "last":
+        w = w_stack[-1]
+    else:
+        raise ValueError(f"Unknown reduce_layers={reduce_layers}")
+
+    # pick batch 0 for printing
+    w0 = w[0]
+    T_action, S_cond = w0.shape
+    if cond_token_names is None:
+        cond_token_names = [f"cond{j}" for j in range(S_cond)]
+    if len(cond_token_names) != S_cond:
+        # don't crash; just fallback
+        cond_token_names = [f"cond{j}" for j in range(S_cond)]
+
+    # per-token influence aggregated over action steps
+    token_total = w0.sum(dim=0)  # (S,)
+    token_mean = w0.mean(dim=0)  # (S,)
+
+    # normalize token_total to 1.0 for easy comparison
+    token_total_norm = token_total / (token_total.sum() + 1e-12)
+
+    print(f"{tag}[COND] cross-attn reduced_layers={reduce_layers} shape(B,T,S)={tuple(w.shape)}")
+    # print tokens sorted by influence
+    order = torch.argsort(token_total_norm, descending=True)
+    print(f"{tag}[COND] token influence (sum over {T_action} action steps; normalized):")
+    for j in order.tolist():
+        print(
+            f"  - {cond_token_names[j]:>12s}: total={token_total[j].item():.4f} "
+            f"mean={token_mean[j].item():.4f} norm={token_total_norm[j].item():.4f}"
+        )
+
+    # per-action-step top token
+    top_idx = torch.argmax(w0, dim=1)  # (T,)
+    print(f"{tag}[COND] top condition token per action step:")
+    for ti in range(T_action):
+        j = int(top_idx[ti].item())
+        print(
+            f"  - action[{ti:02d}] -> {cond_token_names[j]} (w={w0[ti, j].item():.4f})"
+        )
+
+
+def save_attention_trace(trace, save_root: pathlib.Path, prefix: str):
+    if not trace:
+        return
+
+    save_root.mkdir(parents=True, exist_ok=True)
+    for step in trace:
+        denoise_step = int(step.get('denoise_step', -1))
+        diffusion_timestep = int(step.get('diffusion_timestep', -1))
+        out_path = save_root / (
+            f"{prefix}_denoise{denoise_step:03d}_t{diffusion_timestep:04d}.pt"
+        )
+        torch.save(step, out_path)
+#####
+
+@click.command()
+@click.option('--input', '-i', required=True, help='Path to checkpoint')   # checkpoint
+@click.option('--output', '-o', required=True, help='Directory to save recording')   
+@click.option('--robot_ip', '-ri', default="192.168.111.50", required=True, help="UR5's IP address e.g. 192.168.0.204")
+@click.option('--match_dataset', '-m', default=None, help='Dataset used to overlay and adjust initial condition')   
+@click.option('--match_episode', '-me', default=None, type=int, help='Match specific episode from the match dataset')
+@click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
+@click.option('--init_joints', '-j', is_flag=True, default=False, help="Whether to initialize robot joint configuration in the beginning.")
+@click.option('--steps_per_inference', '-si', default=6, type=int, help="Action horizon for inference.")   # 몇개의 action 실행할건지
+@click.option('--max_duration', '-md', default=60, help='Max duration for each epoch in seconds.')
+@click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")  
+@click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
+@click.option('--freeze_rotation', is_flag=True, default=False, help="Keep the current wrist orientation and only execute xyz/hand action.")
+def main(input, output, robot_ip, match_dataset, match_episode,
+    vis_camera_idx, init_joints, 
+    steps_per_inference, max_duration,
+    frequency, command_latency, freeze_rotation):
+
+    # load checkpoint; checkpoint의 cfg 및 파라미터들 다 가져옴
+    ckpt_path = input
+    payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
+    cfg = payload['cfg']   # yaml에 있던 변수들 설정값
+    
+    # Head = 242422304502, Front = 336222070518, Left = 218622276386, Right = 126122270712
+    serial_numbers = ['126122270712'] # right, table
+    # attention weight 확인
+    show_attention = True
+    # condition token names (must match TransformerForDiffusion cond token order)
+    # (time, imageR_t0, imageR_t1, imageT_t0, imageT_t1, lowdim_t0, lowdim_t1, force_t1)
+    cond_token_names = [
+        'time',
+        'imgR_0', 'imgR_1',
+        'imgT_0', 'imgT_1',
+        'lowdim_0', 'lowdim_1',
+        'force_1'
+    ]
+    attention_output_dir = pathlib.Path(output) / 'attention'
+    attention_dump_idx = 0
+    # RTC
+    use_pigdm = False
+    if use_pigdm == True:
+        cfg._target_ = 'diffusion_policy.workspace.bae_train_diffusion_unet_hybrid_pigdm_workspace.TrainDiffusionUnetHybridPigdmWorkspace'
+        cfg.policy._target_ = "diffusion_policy.policy.bae_diffusion_unet_hybrid_image_policy_pigdm.DiffusionUnetHybridImagePigdmPolicy"
+        cfg.policy.noise_scheduler._target_ = "bae_scheduling_ddim_pigdm.DDIMPIGDMScheduler"
+
+    cls = hydra.utils.get_class(cfg._target_)   # WorkSpace 설정
+    workspace = cls(cfg)
+    workspace: BaseWorkspace
+    workspace.load_payload(payload, exclude_keys=None, include_keys=None)
+    # 여기서 workspace.model에 cfg.policy가 들어감
+
+
+    # hacks for method-specific setup.
+    action_offset = 0
+    delta_action = False  
+    if 'diffusion' in cfg.name:
+        # diffusion model
+        policy: BaseImagePolicy
+        policy = workspace.model   # state_dicts의 model을 가져옴 (가중치 값들)
+        if cfg.training.use_ema:
+            policy = workspace.ema_model   # ema_model 가져옴 (가중치 값들)
+        device = torch.device('cuda')
+        policy.eval().to(device)
+
+#####
+        if show_attention:
+            if hasattr(policy, 'set_attention_trace_capture'):
+                policy.set_attention_trace_capture(True)
+            elif hasattr(policy, 'model') and hasattr(policy.model, 'set_attention_capture'):
+                policy.model.set_attention_capture(True)
+            print('[ATTN] cross-attention capture enabled')
+#####
+        
+        #추가됨
+        # policy.obs_encoder.to(device)
+        # print("policy device setting")
+        
+        # set inference params
+        policy.num_inference_steps = 16 # DDIM inference iterations; 노이즈 제거 step 수
+        policy.n_action_steps = policy.horizon - policy.n_obs_steps + 1   # 과거부터 horizon 뽑고, obs만큼 빼고, 1 더하기 (16 - 2 + 1 = 15)
+
+    else:
+        raise RuntimeError("Unsupported policy type: ", cfg.name)
+
+
+    # setup experiment
+    dt = 1/frequency
+
+    obs_res = get_real_obs_resolution(cfg.task.shape_meta)   # obs의 image 해상도 (width, height)
+    n_obs_steps = cfg.n_obs_steps   # obs 관측 step 수
+    print("n_obs_steps: ", n_obs_steps)   # obs 관측 step수 (2)
+    print("steps_per_inference:", steps_per_inference)   # 예측한 action sequence에서 몇개의 action 실행할건지 (6)
+    print("action_offset:", action_offset)   # action 지연 실행 (0)
+
+
+    # =============== relative ==================
+    # 있으면 'relative' or 'abs' / 없으면 None
+    obs_pose_repr = OmegaConf.select(cfg, "task.pose_repr.obs_pose_repr", default=None)
+    action_pose_repr = OmegaConf.select(cfg, "task.pose_repr.action_pose_repr", default=None)
+
+    # ===========================================
+
+
+    # sharedmemory에 데이터들 쌓기; 같은 공유 공간 사용
+    with SharedMemoryManager() as shm_manager:
+        with DualarmRealEnv(
+            output_dir=output, 
+            robot_ip=robot_ip, 
+            frequency=frequency,   
+            camera_serial_numbers=serial_numbers,
+            n_obs_steps=n_obs_steps,   
+            shape_meta=cfg.task.shape_meta,
+            obs_image_resolution=obs_res, # (224,224)
+            obs_float32=True,   
+            init_joints=init_joints,   # False
+            enable_multi_cam_vis=True,   # 실시간 시각화 
+            record_raw_video=False,   # 원본 화질 영상 저장 
+            # number of threads per camera view for video recording (H.264)
+            thread_per_video=3,
+            # video recording quality, lower is better (but slower).
+            video_crf=21,
+            shm_manager=shm_manager) as env:
+            cv2.setNumThreads(1)
+
+
+            # Realsense-viewer에서 설정
+            # Should be the same as demo
+            # realsense exposure
+            # env.realsense.set_exposure(exposure=120, gain=0)
+            # realsense white balance
+            # env.realsense.set_white_balance(white_balance=5900)
+
+            print("Waiting for realsense")
+            time.sleep(1.0)
+
+            print("Warming up policy inference")
+            
+            # obs 받아오기
+            obs = env.get_obs()
+
+            with torch.no_grad():
+                policy.reset()
+
+                # 받은 obs에서 image 정규화 및 다듬기, pose 다듬기
+                # obs: relative or abs
+                if obs_pose_repr == 'relative':
+                    obs_dict_np = get_real_relative_obs_dict(
+                        env_obs=obs, shape_meta=cfg.task.shape_meta)
+                else:
+                    obs_dict_np = get_real_obs_dict(
+                        env_obs=obs, shape_meta=cfg.task.shape_meta)
+
+                for key in obs_dict_np.keys():
+                    print(f"{key}: {obs_dict_np[key].shape}, {obs_dict_np[key].dtype}")
+
+                # shape_meta 계층구조는 유지하면서 np --> tensor로 변환, 텐서 배치차원 추가
+                obs_dict = dict_apply(obs_dict_np, 
+                    lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
+
+                # obs로 action 예측 
+                if use_pigdm == True:
+                    result = policy.predict_action_pigdm(obs_dict, obs)
+                else:
+                    result = policy.predict_action(obs_dict)
+
+#####
+                if show_attention and hasattr(policy, 'model') and hasattr(policy.model, 'get_attention_weights'):
+                    attn = policy.model.get_attention_weights()
+                    summarize_cross_attention(attn, tag='[warmup] ')
+                    summarize_condition_token_influence(
+                        attn_info=attn,
+                        cond_token_names=cond_token_names,
+                        tag='[warmup] ',
+                        reduce_layers='mean'
+                    )
+                if show_attention and hasattr(policy, 'get_last_attention_trace'):
+                    warmup_trace = policy.get_last_attention_trace()
+                    save_attention_trace(warmup_trace, attention_output_dir, prefix='warmup')
+#####
+
+                # 실제 실행할 action trajectory
+                action = result['action'][0].detach().to('cpu').numpy()   # [0]은 배치차원 제거, tensor --> np
+                assert action.shape[-1] == cfg.task.shape_meta.action.shape[0]   # action 차원에 맞게 바꿔주기
+                del result
+
+            np.set_printoptions(suppress=True, floatmode="fixed", precision=11)
+            print('Ready!')
+            while True:
+                
+                # ========== policy control loop ==============
+                try:
+                    # start episode
+                    policy.reset()
+                    start_delay = 1.0
+                    eval_t_start = time.time() + start_delay   # 시스템시간, 영상 로그용
+                    t_start = time.monotonic() + start_delay   # 로봇 제어 시간
+                    # print("[TIME] t_start: ", t_start%100)
+
+                    env.start_episode(eval_t_start)   # 영상 저장 시작
+                    # wait for 1/30 sec to get the closest frame actually
+                    # reduces overall latency; 카메라 프레임 잘 받아오도록
+                    frame_latency = 1/30
+                    precise_wait(eval_t_start - frame_latency, time_func=time.time)
+                    print("Started!")
+                    iter_idx = 0   # trajectory 실행 개수
+                    term_area_start_timestamp = float('inf')
+                    perv_target_pose = None
+                    while True:  
+                        # calculate timing; 실행할 action 만큼 기다릴 시간
+                        # print("[TIME] current time: ", time.monotonic()%100)
+                        t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
+                        # print("[TIME] t_cycle_end: ", t_cycle_end%100)
+
+                        obs = env.get_obs()
+                        obs_timestamps = obs['timestamp']
+                        print(f'Obs latency {time.time() - obs_timestamps[-1]}')
+
+                        # run inference; action 예측
+                        with torch.no_grad():
+                            s = time.time()
+
+                            # obs: relative or abs
+                            if obs_pose_repr == 'relative':
+                                obs_dict_np = get_real_relative_obs_dict(
+                                    env_obs=obs, shape_meta=cfg.task.shape_meta)
+                            else:
+                                obs_dict_np = get_real_obs_dict(
+                                    env_obs=obs, shape_meta=cfg.task.shape_meta)
+                       
+                            obs_dict = dict_apply(obs_dict_np, 
+                                lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
+                            
+                            # action  
+                            if use_pigdm == True:
+                                result = policy.predict_action_pigdm(obs_dict, obs)
+                            else:
+                                result = policy.predict_action(obs_dict)
+
+#####
+                            if show_attention and hasattr(policy, 'model') and hasattr(policy.model, 'get_attention_weights'):
+                                attn = policy.model.get_attention_weights()
+                                summarize_cross_attention(attn, tag='[eval] ')
+                                summarize_condition_token_influence(
+                                    attn_info=attn,
+                                    cond_token_names=cond_token_names,
+                                    tag='[eval] ',
+                                    reduce_layers='mean'
+                                )
+                            if show_attention and hasattr(policy, 'get_last_attention_trace'):
+                                trace = policy.get_last_attention_trace()
+                                save_attention_trace(
+                                    trace,
+                                    attention_output_dir,
+                                    prefix=f'iter{attention_dump_idx:06d}'
+                                )
+                                attention_dump_idx += 1
+#####
+
+                            # this action starts from the first obs step
+                            action = result['action'][0].detach().to('cpu').numpy()   # 실행할 action[Horizon, Action_Dim]
+                            
+                            # action: relative or abs
+                            if action_pose_repr == 'relative':
+                                action = get_abs_action_from_relative(action=action, env_obs=obs)
+                            if freeze_rotation:
+                                current_rot = st.Rotation.from_quat(obs['robot_quat_R'][-1]).as_matrix()
+                                current_rot6d = mat_to_rot6d(current_rot)
+                                action[:, 3:9] = current_rot6d
+
+                            print('Inference latency:', time.time() - s)
+
+                        this_target_poses = np.zeros((len(action), action.shape[-1]), dtype=np.float64)
+                        this_target_poses[:, :action.shape[-1]] = action
+
+                        # deal with timing
+                        # the same step actions are always the target for
+                        action_timestamps = (np.arange(len(action), dtype=np.float64) + action_offset
+                            ) * dt + obs_timestamps[-1]
+                        action_exec_latency = 0.01
+                        curr_time = time.time()
+                        is_new = action_timestamps > (curr_time + action_exec_latency)   # 현재시점 이후 action만 실행
+                        # print("[DEBUG] action_timestamps: ", np.array(action_timestamps)%10)
+                        # print("[DEBUG] is_new: ", is_new)
+
+                        ############################################ timestamp
+                        # while문은 6 * 0.1 주기로 무조건 돌음
+                        # 현재시간 t / 이용하는 obs_timestamp = t - obs_latency
+                        #   1           2              3      4      5      6      7         8         9     10    11    12    13    14    15 16
+                        # -0.1    obs_timestamp      +0.1   +0.2   +0.3   +0.4   +0.5      +0.6
+                        #                                                        -0.1  obs_timestamp  +0.1  +0.2  +0.3  +0.4  +0.5  +0.6
+                        # print("Current time:", curr_time)
+                        # print("Action timestamps:", action_timestamps)
+                        ############################################
+                        
+                        if np.sum(is_new) == 0:   # 전부 지나버림
+                            print('[WARNING] All actions are outdated!')
+                            # exceeded time budget, still do something
+                            this_target_poses = this_target_poses[[-1]]   # 마지막 action이라도 실행
+                            # schedule on next available step
+                            next_step_idx = int(np.ceil((curr_time - eval_t_start) / dt))
+                            action_timestamp = eval_t_start + (next_step_idx) * dt
+                            print('Over budget', action_timestamp - curr_time)
+                            action_timestamps = np.array([action_timestamp])
+
+                        else:   # is_new = 1 인것만 실행
+                            this_target_poses = this_target_poses[is_new][:steps_per_inference]
+                            action_timestamps = action_timestamps[is_new][:steps_per_inference]
+
+                        # execute actions; 실제 action 실행부분; 
+                        env.exec_actions(
+                            actions=this_target_poses,
+                            timestamps=action_timestamps
+                        )
+                        print(f"Submitted {len(this_target_poses)} steps of actions.")
+                       
+
+                        # visualize
+                        # episode_id = env.replay_buffer.n_episodes
+                        # vis_img = obs[f'image{vis_camera_idx}'][-1]
+                        # text = 'Episode: {}, Time: {:.1f}'.format(
+                        #     episode_id, time.monotonic() - t_start
+                        # )
+                        # cv2.putText(
+                        #     vis_img,
+                        #     text,
+                        #     (10,20),
+                        #     fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        #     fontScale=0.5,
+                        #     thickness=1,
+                        #     color=(255,255,255)
+                        # )
+                        # cv2.imshow('default', vis_img[...,::-1])
+
+
+                        # 's' 누르면 종료
+                        key_stroke = cv2.pollKey()
+                        if key_stroke == ord('s'):
+                            # Stop episode
+                            # Hand control back to human
+                            env.end_episode()
+                            print('Stopped.')
+                            break
+
+
+                        # auto termination; 한계시간 지나면 종료
+                        terminate = False
+                        if time.monotonic() - t_start > max_duration:
+                            terminate = True
+                            print('Terminated by the timeout!')
+
+                        if terminate:
+                            env.end_episode()
+                            break
+
+
+                        # wait for execution; 로봇이 action 여러개 실행할동안 기다림
+                        precise_wait(t_cycle_end - frame_latency)
+                        iter_idx += steps_per_inference
+                        # print("[TIME] cycle 끝 시간: ", time.monotonic()%100, time.time()%10)
+                        # time.sleep(1)
+
+                except KeyboardInterrupt:
+                    print("Interrupted!")
+                    # stop robot.
+                    env.end_episode()
+                
+                print("Stopped.")
+
+
+
+# %%
+if __name__ == '__main__':
+    main()
