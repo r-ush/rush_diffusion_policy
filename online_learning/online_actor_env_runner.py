@@ -41,6 +41,7 @@ sys.path = local_paths + sys.path
 
 import os
 import time
+import glob
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
@@ -52,6 +53,7 @@ import dill
 import hydra
 import click
 import cv2
+import av
 from multiprocessing.managers import SharedMemoryManager
 from omegaconf import OmegaConf
 
@@ -84,6 +86,31 @@ def maybe_hotswap_weights(mailbox, policy, current_version, device):
           f"(learner demo={payload.get('num_demos', '?')}, "
           f"missing={len(missing)}, unexpected={len(unexpected)})")
     return latest
+
+
+WIN = "actor_control"
+
+
+def wait_videos_finalized(video_dir, timeout=30.0, poll=0.5):
+    """end_episode 후 mp4 인코더가 moov atom을 다 쓸 때까지 대기.
+    안 기다리면 relabel이 'moov atom not found'로 깨진 파일을 읽는다."""
+    mp4s = sorted(glob.glob(os.path.join(video_dir, "*.mp4")))
+    if not mp4s:
+        print(f"[Actor][WARN] 영상 파일 없음: {video_dir}")
+        return
+    deadline = time.monotonic() + timeout
+    for path in mp4s:
+        while True:
+            try:
+                with av.open(path) as container:
+                    next(container.decode(video=0))
+                break  # 정상 디코드 → 마무리 완료
+            except Exception:
+                if time.monotonic() > deadline:
+                    print(f"[Actor][WARN] 영상 마무리 대기 타임아웃(>{timeout}s): {path}")
+                    break
+                time.sleep(poll)
+    print(f"[Actor] 영상 마무리 확인 완료: {video_dir}")
 
 
 @click.command()
@@ -156,6 +183,10 @@ def main(input, output, robot_ip, steps_per_inference,
             shm_manager=shm_manager,
         ) as env:
             cv2.setNumThreads(1)
+            # 메인 프로세스 전용 창: cv2.pollKey는 '이 프로세스가 만든 창'이
+            # 포커스일 때만 키를 받는다. 카메라 vis 창은 별도 프로세스라 키가 안 옴.
+            cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(WIN, 520, 150)
             print("[Actor] 센서 워밍업...")
             time.sleep(2.0)
 
@@ -223,8 +254,22 @@ def main(input, output, robot_ip, steps_per_inference,
                             action_timestamps = action_timestamps[is_new][:steps_per_inference]
 
                         # ── 키 입력: correction 토글 / 종료 ──
+                        # 페달 매핑(왼→오): a=correction 토글, b=유지(S), c=폐기(D).
+                        # 키보드는 a/s/d로 호환(참고: 페달 c=폐기이므로 키보드 c는 correction이 아님).
+                        # ★ 이 컨트롤 창을 클릭(포커스)한 상태에서 페달/키를 눌러야 입력됨.
+                        canvas = np.zeros((150, 520, 3), dtype=np.uint8)
+                        canvas[:] = (0, 0, 120) if correction_active else (30, 30, 30)
+                        _txt = [
+                            "ACTOR CONTROL - click here, then pedal/keys",
+                            f"correction: {'ON (human)' if correction_active else 'off'}",
+                            "a=correction   b/s=keep   c/d=discard",
+                        ]
+                        for _i, _line in enumerate(_txt):
+                            cv2.putText(canvas, _line, (10, 35 + _i * 40),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 1, cv2.LINE_AA)
+                        cv2.imshow(WIN, canvas)
                         key_stroke = cv2.pollKey()
-                        if key_stroke in (ord('c'), ord('C')):
+                        if key_stroke in (ord('a'), ord('A')):
                             correction_active = not correction_active
                             print(f"[Actor] correction={'ON (사람 교정중)' if correction_active else 'off'}")
 
@@ -234,10 +279,10 @@ def main(input, output, robot_ip, steps_per_inference,
                         env.exec_actions(actions=this_target_poses,
                                          timestamps=action_timestamps, stages=stages)
 
-                        if key_stroke in (ord('s'), ord('S')):
+                        if key_stroke in (ord('b'), ord('B'), ord('s'), ord('S')):
                             env.end_episode(); keep = True
                             print("[Actor] 에피소드 종료 (유지)"); break
-                        if key_stroke in (ord('d'), ord('D')):
+                        if key_stroke in (ord('c'), ord('C'), ord('d'), ord('D')):
                             env.drop_episode(); keep = False
                             print("[Actor] 에피소드 종료 (폐기)"); break
 
@@ -256,6 +301,10 @@ def main(input, output, robot_ip, steps_per_inference,
                 # ── 유지된 에피소드를 relabel 후 learner로 전송 ──
                 if keep and C.SEND_TRANSITIONS:
                     try:
+                        # 영상 인코더가 moov atom을 다 쓸 때까지 대기 (깨진 mp4 relabel 방지)
+                        _ep_idx = env.replay_buffer.n_episodes - 1
+                        wait_videos_finalized(
+                            os.path.join(str(env.output_dir), "videos", str(_ep_idx)))
                         ep_hdf5 = relabel_last_episode_to_hdf5(
                             env.replay_buffer,
                             env_output_dir=str(env.output_dir),
@@ -266,10 +315,29 @@ def main(input, output, robot_ip, steps_per_inference,
                     except Exception as e:
                         print(f"[Actor] 에피소드 전송 실패: {e}")
 
-                print("[Actor] Enter=다음 에피소드 / Ctrl+C=종료")
-                try:
-                    sys.stdin.readline()
-                except (KeyboardInterrupt, EOFError):
+                # ── 다음 에피소드 대기 ──
+                # 터미널 stdin.readline()을 쓰면 그동안 cv2 창 이벤트가 안 돌아 창이
+                # '응답 없음'으로 얼어붙는다. 컨트롤 창을 계속 갱신하며 페달/키로 받는다.
+                print("[Actor] 컨트롤 창에서: a/b/Enter=다음 에피소드 / q/Esc=종료")
+                _quit = False
+                while True:
+                    canvas = np.zeros((150, 520, 3), dtype=np.uint8)
+                    canvas[:] = (60, 40, 0)
+                    for _i, _line in enumerate([
+                        "Episode saved & sent.",
+                        "a / b / Enter = next episode",
+                        "q / Esc = quit",
+                    ]):
+                        cv2.putText(canvas, _line, (10, 35 + _i * 40),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1, cv2.LINE_AA)
+                    cv2.imshow(WIN, canvas)
+                    k = cv2.pollKey()
+                    if k in (ord('a'), ord('A'), ord('b'), ord('B'), ord('s'), ord('S'), 13, 10):
+                        break                       # 다음 에피소드
+                    if k in (ord('q'), ord('Q'), 27):
+                        _quit = True; break         # 종료
+                    time.sleep(0.02)
+                if _quit:
                     break
 
     print("[Actor] 종료.")

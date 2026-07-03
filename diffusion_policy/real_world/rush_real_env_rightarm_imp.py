@@ -4,6 +4,7 @@ import numpy as np
 import time
 import shutil
 import math
+import av
 from multiprocessing.managers import SharedMemoryManager
 from diffusion_policy.real_world.rightarm_interpolation_controller_imp import RightarmInterpolationControllerImp
 from diffusion_policy.real_world.multi_realsense import MultiRealsense, SingleRealsense
@@ -450,5 +451,21 @@ class RightarmRealEnvImp:
         episode_id = self.replay_buffer.n_episodes
         this_video_dir = self.video_dir.joinpath(str(episode_id))
         if this_video_dir.exists():
+            # stop_recording()은 자식 프로세스에 명령만 보내고 즉시 리턴(async)한다.
+            # 인코더가 mp4를 다 쓰고 파일을 놓기 전에 rmtree하면 SingleRealsense가
+            # FileNotFoundError로 죽는다 → 인코더 마무리를 기다린 뒤 삭제.
+            self._wait_videos_released(this_video_dir)
             shutil.rmtree(str(this_video_dir))
         print(f'Episode {episode_id} dropped!')
+
+    def _wait_videos_released(self, video_dir, timeout=15.0, poll=0.3):
+        "인코더가 각 mp4를 다 쓰고(close) 놓을 때까지 대기 (av.open 성공 = 마무리됨)."
+        deadline = time.monotonic() + timeout
+        for path in sorted(video_dir.glob("*.mp4")):
+            while time.monotonic() < deadline:
+                try:
+                    with av.open(str(path)) as c:
+                        next(c.decode(video=0))
+                    break
+                except Exception:
+                    time.sleep(poll)

@@ -4,8 +4,8 @@
 set -e
 
 python rush_eval_real_robot_imp_right.py \
-    --input "data/outputs/logistics_abs_10/epoch=0800-train_loss=0.000.ckpt" \
+    --input "data/outputs/logistics_abs_10/epoch=0300-train_loss=0.002.ckpt" \
     --output data/results \
     --steps_per_inference 12 \
     --frequency 10 \
-    --num_inference_steps 12
+    --num_inference_steps 60
