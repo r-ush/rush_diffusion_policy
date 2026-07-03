@@ -251,6 +251,10 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                             print('Inference latency:', time.time() - s)
 
                         # convert policy action to env actions
+                        if action_pose_repr == 'relative':
+                            print("Action shape:", action.shape)
+                            print("Generated Action (Relative):", action[0])
+                            
                         if delta_action:   # False
                             assert len(action) == 1
                             if perv_target_pose is None:

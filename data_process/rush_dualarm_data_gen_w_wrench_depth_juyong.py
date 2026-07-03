@@ -42,6 +42,8 @@ G = {
     'latest_joint_R': None,
     'latest_hand_L': None,
     'latest_hand_R': None,
+    'latest_hand_cmd_L': None,
+    'latest_hand_cmd_R': None,
     'latest_joint_torque_L': None,
     'latest_joint_torque_R': None,
     
@@ -58,12 +60,6 @@ G = {
     'latest_wrench_baby_L': None,
     'latest_wrench_baby_R': None,
     
-    'latest_wrench_zeroset_thumb_L': None,
-    'latest_wrench_zeroset_index_L': None,
-    'latest_wrench_zeroset_middle_L': None,
-    'latest_wrench_zeroset_ring_L': None,
-    'latest_wrench_zeroset_baby_L': None,
-    
     'latest_F_e_raw': None,
     'latest_desired_pose': None,
     'latest_current_pose': None,
@@ -79,10 +75,16 @@ def init_buffer():
             'joint_R': [],
             'hand_L': [],
             'hand_R': [],
+            'hand_cmd_L': [],
+            'hand_cmd_R': [],
             'image_H': [], 
             'image_T': [], 
             'image_L': [], 
             'image_R': [], 
+            'depth_H': [], 
+            'depth_T': [], 
+            'depth_L': [], 
+            'depth_R': [], 
             'timestamp_robot': [],
 
             ## Wrench data (250Hz)
@@ -98,12 +100,6 @@ def init_buffer():
             'wrench_middle_R': [], 
             'wrench_ring_R': [],   
             'wrench_baby_R': [],   
-
-            'wrench_zeroset_thumb_L': [],
-            'wrench_zeroset_index_L': [],
-            'wrench_zeroset_middle_L': [],
-            'wrench_zeroset_ring_L': [],
-            'wrench_zeroset_baby_L': [],
 
             'joint_torque_L': [], 
             'joint_torque_R': [],
@@ -132,30 +128,31 @@ def save_wrench_data(buffer, last_save_time):
     buffer['observations']['wrench_ring_R'].append(G['latest_wrench_ring_R'])
     buffer['observations']['wrench_baby_R'].append(G['latest_wrench_baby_R'])
     buffer['observations']['joint_torque_R'].append(G['latest_joint_torque_R'])
-    # Left wrench zeroset
-    buffer['observations']['wrench_zeroset_thumb_L'].append(G['latest_wrench_zeroset_thumb_L'])
-    buffer['observations']['wrench_zeroset_index_L'].append(G['latest_wrench_zeroset_index_L'])
-    buffer['observations']['wrench_zeroset_middle_L'].append(G['latest_wrench_zeroset_middle_L'])
-    buffer['observations']['wrench_zeroset_ring_L'].append(G['latest_wrench_zeroset_ring_L'])
-    buffer['observations']['wrench_zeroset_baby_L'].append(G['latest_wrench_zeroset_baby_L'])
     
     buffer['observations']['F_e_raw'].append(G['latest_F_e_raw'])
     buffer['observations']['desired_pose'].append(G['latest_desired_pose'])
     buffer['observations']['current_pose'].append(G['latest_current_pose'])
     buffer['observations']['timestamp_wrench'].append(last_save_time)
 
-def save_robot_data(buffer, images, last_save_time):
+def save_robot_data(buffer, frames, last_save_time):
     buffer['observations']['joint_L'].append(G['latest_joint_L'])
     buffer['observations']['joint_R'].append(G['latest_joint_R'])
     buffer['observations']['hand_L'].append(G['latest_hand_L'])
     buffer['observations']['hand_R'].append(G['latest_hand_R'])
+    buffer['observations']['hand_cmd_L'].append(G['latest_hand_cmd_L'])
+    buffer['observations']['hand_cmd_R'].append(G['latest_hand_cmd_R'])
     
-    # Images (Head, Table, Left, Right)
-    for i, key in enumerate(['image_H', 'image_T', 'image_L', 'image_R']):
-        if images and i < len(images) and images[i] is not None:
-            buffer['observations'][key].append(images[i].copy())
+    # Images and Depths (Head, Table, Left, Right)
+    for i, (img_key, depth_key) in enumerate([('image_H', 'depth_H'), 
+                                              ('image_T', 'depth_T'), 
+                                              ('image_L', 'depth_L'), 
+                                              ('image_R', 'depth_R')]):
+        if frames and i < len(frames) and frames[i] is not None and frames[i][0] is not None:
+            buffer['observations'][img_key].append(frames[i][0].copy())
+            buffer['observations'][depth_key].append(frames[i][1].copy())
         else:
-            buffer['observations'][key].append(None)
+            buffer['observations'][img_key].append(None)
+            buffer['observations'][depth_key].append(None)
             
     buffer['observations']['timestamp_robot'].append(last_save_time)
 
@@ -172,7 +169,7 @@ def on_press(key):
                 G['recording'] = False
                 print("\n[EVENT] Stop recording")
                 if G['teleop_controller']:
-                    G['teleop_controller'].send_teleop_command(2)  # data: 0 # data: 2
+                    G['teleop_controller'].send_teleop_command(2)  # data: 0 homming
         elif key.char == 't':
             G['terminal'] = True
             print("\n[EVENT] Terminal signal received")
@@ -214,6 +211,8 @@ class Pipeline:
         self.config = rs.config()
         self.config.enable_device(serial)
         self.config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        self.config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        self.align = rs.align(rs.stream.color)
         try:
             profile = self.pipeline.start(self.config)
             for i in range(3):
@@ -225,13 +224,15 @@ class Pipeline:
             self.pipeline = None
 
     def get_frame(self):
-        if not self.pipeline: return None
+        if not self.pipeline: return None, None
         try:
             frames = self.pipeline.wait_for_frames(timeout_ms=50)
+            frames = self.align.process(frames)
             color_frame = frames.get_color_frame()
-            if not color_frame: return None
-            return np.asanyarray(color_frame.get_data())
-        except: return None
+            depth_frame = frames.get_depth_frame()
+            if not color_frame or not depth_frame: return None, None
+            return np.asanyarray(color_frame.get_data()), np.asanyarray(depth_frame.get_data())
+        except: return None, None
 
     def get_camera_matrix(self):
         if not self.pipeline: return None, None
@@ -249,6 +250,7 @@ class JointSubscriber(Node):
         self.create_subscription(JointState, '/joint_states', self.joint_cb, 10, callback_group=self.group)
         self.create_subscription(JointState, '/dsr01/joint_states', self.joint_cb, 10, callback_group=self.group)
         self.create_subscription(JointState, '/dsr02/joint_states', self.joint_cb, 10, callback_group=self.group)
+        self.create_subscription(JointState, '/aidin_dualarm_joint_controller/joint_state_command', self.hand_cmd_cb, 10, callback_group=self.group)
         self.create_subscription(WrenchStamped, '/aft_sensor1/wrench', self.left_aft_cb, 10, callback_group=self.group)
         self.create_subscription(WrenchStamped, '/aft_sensor2/wrench', self.right_aft_cb, 10, callback_group=self.group)
         self.create_subscription(MultiDOFJointState, '/left_ft_sensor_broadcaster/wrench', self.left_ft_cb, 10, callback_group=self.group)
@@ -256,7 +258,6 @@ class JointSubscriber(Node):
         self.create_subscription(Float64MultiArray, '/F_e_raw', self.fe_cb, 10, callback_group=self.group)
         self.create_subscription(Float64MultiArray, '/desired_pose', self.des_cb, 10, callback_group=self.group)
         self.create_subscription(Float64MultiArray, '/current_pose', self.cur_cb, 10, callback_group=self.group)
-        self.create_subscription(MultiDOFJointState, '/left_wrench_zeroset', self.left_wrench_zeroset_cb, 10, callback_group=self.group)
         self.teleop_pub = self.create_publisher(UInt8, '/teleop_control', 10)
         self.names_printed = False
 
@@ -306,6 +307,11 @@ class JointSubscriber(Node):
         G['latest_hand_L'] = [m.get(j, 0.0) for j in self.hand_name[:15]]
         G['latest_hand_R'] = [m.get(j, 0.0) for j in self.hand_name[15:30]]
         
+    def hand_cmd_cb(self, msg):
+        m = {n: p for n, p in zip(msg.name, msg.position)}
+        G['latest_hand_cmd_L'] = [m.get(j, 0.0) for j in self.hand_name[:15]]
+        G['latest_hand_cmd_R'] = [m.get(j, 0.0) for j in self.hand_name[15:30]]
+
     def left_aft_cb(self, msg): G['latest_wrench_aft_L'] = np.array([msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z, msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z])
     def right_aft_cb(self, msg): G['latest_wrench_aft_R'] = np.array([msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z, msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z])
     def left_ft_cb(self, msg): 
@@ -317,14 +323,6 @@ class JointSubscriber(Node):
     def fe_cb(self, msg): G['latest_F_e_raw'] = np.array(msg.data)
     def des_cb(self, msg): G['latest_desired_pose'] = np.array(msg.data)
     def cur_cb(self, msg): G['latest_current_pose'] = np.array(msg.data)
-    def left_wrench_zeroset_cb(self, msg):
-        f = [np.array([w.force.x, w.force.y, w.force.z, w.torque.x, w.torque.y, w.torque.z]) for w in msg.wrench]
-        if len(f) >= 5:
-            G['latest_wrench_zeroset_thumb_L'] = f[0]
-            G['latest_wrench_zeroset_index_L'] = f[1]
-            G['latest_wrench_zeroset_middle_L'] = f[2]
-            G['latest_wrench_zeroset_ring_L'] = f[3]
-            G['latest_wrench_zeroset_baby_L'] = f[4]
 
 class TeleopController(Node):
     def __init__(self):
@@ -338,7 +336,7 @@ class TeleopController(Node):
 
 def display_process_func(img_q, confirm_q, response_q, window_names, stop_event):
     confirming = False
-    last_imgs = None
+    last_frames = None
     last_recording = False
 
     while not stop_event.is_set():
@@ -350,14 +348,14 @@ def display_process_func(img_q, confirm_q, response_q, window_names, stop_event)
 
         # 이미지 큐에서 최신 프레임 가져오기
         try:
-            last_imgs, last_recording = img_q.get_nowait()
+            last_frames, last_recording = img_q.get_nowait()
         except: pass
 
         # 화면 렌더링
-        if last_imgs is not None:
-            for i, (name, img) in enumerate(zip(window_names, last_imgs)):
-                if img is None: continue
-                disp = img.copy()
+        if last_frames is not None:
+            for i, (name, frame_tuple) in enumerate(zip(window_names, last_frames)):
+                if frame_tuple is None or frame_tuple[0] is None: continue
+                disp = frame_tuple[0].copy()
                 if confirming:
                     # 반투명 어두운 오버레이
                     overlay = disp.copy()
