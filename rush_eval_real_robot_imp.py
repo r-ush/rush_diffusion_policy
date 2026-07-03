@@ -14,7 +14,13 @@ Usage:
 
 Recording control:
   Click the opencv window (make sure it's in focus).
-  Press "S" to stop evaluation.
+  Press "C" to toggle correction mode ON/OFF. Turn it ON right before you
+    physically push/guide the arm to correct it, and OFF once you let go.
+    This flag is saved per control-step in the episode's `stage` field
+    (0=policy, 1=human correction), used later by
+    data_process/rush_replay_buffer_to_correction_hdf5.py to relabel data.
+  Press "S" to stop the episode and KEEP the recorded data.
+  Press "D" to stop the episode and DISCARD the recorded data.
   Press "Q" or Ctrl+C to exit program.
 """
 
@@ -178,6 +184,7 @@ def main(input, output, robot_ip,
                     print("[INFO] Episode started!")
 
                     iter_idx = 0
+                    correction_active = False
                     while True:
                         # --- timing ---
                         t_cycle_end = t_start + (iter_idx + steps_per_inference) * dt
@@ -225,17 +232,30 @@ def main(input, output, robot_ip,
                             this_target_poses = this_target_poses[is_new]
                             action_timestamps  = action_timestamps[is_new]
 
+                        # --- keypress check (toggle correction mode / stop) ---
+                        key_stroke = cv2.pollKey()
+                        if key_stroke == ord('c') or key_stroke == ord('C'):
+                            correction_active = not correction_active
+                            print(f"[INFO] Correction mode: {'ON (human correcting)' if correction_active else 'OFF'}")
+
                         # --- execute ---
+                        stages = np.full(len(this_target_poses),
+                                          1 if correction_active else 0,
+                                          dtype=np.int64)
                         env.exec_actions(
                             actions=this_target_poses,
-                            timestamps=action_timestamps)
-                        print(f"[INFO] Submitted {len(this_target_poses)} action steps.")
+                            timestamps=action_timestamps,
+                            stages=stages)
+                        print(f"[INFO] Submitted {len(this_target_poses)} action steps. "
+                              f"correction={correction_active}")
 
-                        # --- keypress check ---
-                        key_stroke = cv2.pollKey()
                         if key_stroke == ord('s') or key_stroke == ord('S'):
                             env.end_episode()
-                            print("[INFO] Episode stopped by user.")
+                            print("[INFO] Episode stopped by user (kept).")
+                            break
+                        if key_stroke == ord('d') or key_stroke == ord('D'):
+                            env.drop_episode()
+                            print("[INFO] Episode stopped by user (DISCARDED).")
                             break
 
                         # --- timeout check ---
