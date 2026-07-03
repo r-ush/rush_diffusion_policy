@@ -1,0 +1,146 @@
+Panels:
+- Class: rviz_common/Displays
+  Help Height: 0
+  Name: Displays
+  Property Tree Widget:
+    Expanded:
+    - /Global Options1
+    - /RobotModel1
+    - /MarkerArray1
+    - /MarkerArray1/Namespaces1
+    Splitter Ratio: 0.5
+  Tree Height: 600
+- Class: rviz_common/Views
+  Collapsed: false
+  Name: Views
+  Splitter Ratio: 0.5
+Visualization Manager:
+  Class: ''
+  Displays:
+  - Alpha: 0.5
+    Cell Size: 0.05
+    Class: rviz_default_plugins/Grid
+    Color: 160; 160; 164
+    Enabled: true
+    Line Style:
+      Line Width: 0.029999999329447746
+      Value: Lines
+    Name: Grid
+    Normal Cell Count: 0
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Plane: XY
+    Plane Cell Count: 20
+    Reference Frame: <Fixed Frame>
+    Value: true
+  - Class: rviz_default_plugins/RobotModel
+    Collision Enabled: false
+    Description File: ''
+    Description Source: Topic
+    Description Topic: /hdf5_robot_description
+    Enabled: true
+    Links:
+      All Links Enabled: true
+      Expand Joint Details: false
+      Expand Link Details: false
+      Expand Tree: false
+      Link Tree Style: Links in Alphabetic Order
+    Name: RobotModel
+    TF Prefix: ''
+    Update Interval: 0
+    Value: true
+    Visual Enabled: true
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: MarkerArray
+    Namespaces:
+      contact_plane: true
+      force_thumb: true
+      force_index: true
+      force_middle: false
+      force_ring: false
+      force_baby: false
+      force_text_thumb: true
+      force_text_index: true
+      force_text_middle: true
+      force_text_ring: false
+      force_text_baby: false
+      normal_index: true
+      normal_middle: true
+      normal_thumb: true
+      proj_index: true
+      proj_middle: true
+      proj_thumb: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /hdf5_force_markers
+    Value: true
+  - Class: rviz_default_plugins/TF
+    Enabled: true
+    Frames:
+      All Enabled: false
+      left_sensor_index:
+        Value: true
+      left_sensor_middle:
+        Value: true
+      left_sensor_thumb:
+        Value: true
+    Marker Scale: 0.05
+    Name: TF
+    Show Arrows: false
+    Show Axes: true
+    Show Names: false
+    Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: left_hand_base_link
+    Frame Rate: 30
+  Name: root
+  Tools:
+  - Class: rviz_default_plugins/Interact
+    Hide Inactive Objects: true
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/Select
+  - Class: rviz_default_plugins/FocusCamera
+  - Class: rviz_default_plugins/Measure
+    Line color: 128; 128; 0
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 0.5
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.05999999865889549
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0.1
+        Z: 0.15
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05000000074505806
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.5
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 0.785
+    Saved: null
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1400
+  X: 100
+  Y: 50

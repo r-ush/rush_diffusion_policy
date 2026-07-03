@@ -1,0 +1,294 @@
+vendor_id: "0x00000ba9"
+product_id: "0x30000001"
+assign_activate: 0x0300
+auto_fault_reset: false
+sdo:
+  # Modes of Operation
+  - { index: 0x6060, sub_index: 0x00, type: int8, value: 8 }
+  - { index: 0x6068, sub_index: 0x00, type: int8, value: 8 }
+  - { index: 0x7060, sub_index: 0x00, type: int8, value: 8 }
+
+  # Homming Mode
+  - { index: 0x6098, sub_index: 0x00, type: int8, value: 35 }
+  - { index: 0x6898, sub_index: 0x00, type: int8, value: 35 }
+  - { index: 0x7098, sub_index: 0x00, type: int8, value: 35 }
+
+rpdo:
+  - index: "0x1600"
+    channels:
+      - {
+          index: 0x607a,
+          sub_index: 0x00,
+          type: int32,
+          command_interface: axis1/position,
+        } # Target Position
+      - {
+          index: 0x6071,
+          sub_index: 0x00,
+          type: int16,
+          command_interface: axis1/effort,
+        } # Target Torque
+      - {
+          index: 0x6072,
+          sub_index: 0x00,
+          type: int16,
+          command_interface: axis1/maximum_effort,
+          default_value: 1000,
+        } # Maximum Torque
+      - {
+          index: 0x6040,
+          sub_index: 0x00,
+          type: uint16,
+          default_value: 0x06,
+          command_interface: axis1/control_word,
+        } # Controlword
+      - {
+          index: 0x6060,
+          sub_index: 0x00,
+          type: int8,
+          command_interface: axis1/mode_of_operation,
+        } # Modes of Operation
+      - { index: 0x6060, sub_index: 0x00, type: int8 } # Modes of Operation
+  - index: "0x1610"
+    channels:
+      - {
+          index: 0x687a,
+          sub_index: 0x00,
+          type: int32,
+          command_interface: axis2/position,
+        } # Target Position
+      - {
+          index: 0x6871,
+          sub_index: 0x00,
+          type: int16,
+          command_interface: axis2/effort,
+        } # Target Torque
+      - {
+          index: 0x6872,
+          sub_index: 0x00,
+          type: int16,
+          command_interface: axis2/maximum_effort,
+          default_value: 1000,
+        } # Maximum Torque
+      - {
+          index: 0x6840,
+          sub_index: 0x00,
+          type: uint16,
+          default_value: 0x06,
+          command_interface: axis2/control_word,
+        } # Controlword
+      - {
+          index: 0x6860,
+          sub_index: 0x00,
+          type: int8,
+          command_interface: axis2/mode_of_operation,
+        } # Modes of Operation
+      - { index: 0x6860, sub_index: 0x00, type: int8 } # Modes of Operation
+  - index: "0x1620"
+    channels:
+      - {
+          index: 0x707a,
+          sub_index: 0x00,
+          type: int32,
+          command_interface: axis3/position,
+        } # Target Position
+      - {
+          index: 0x7071,
+          sub_index: 0x00,
+          type: int16,
+          command_interface: axis3/effort,
+        } # Target Torque
+      - {
+          index: 0x7072,
+          sub_index: 0x00,
+          type: int16,
+          command_interface: axis3/maximum_effort,
+          default_value: 1000,
+        } # Maximum Torque
+      - {
+          index: 0x7040,
+          sub_index: 0x00,
+          type: uint16,
+          default_value: 0x06,
+          command_interface: axis3/control_word,
+        } # Controlword
+      - {
+          index: 0x7060,
+          sub_index: 0x00,
+          type: int8,
+          command_interface: axis3/mode_of_operation,
+        } # Modes of Operation
+      - { index: 0x7060, sub_index: 0x00, type: int8 } # Modes of Operation
+
+tpdo:
+  - index: "0x1a00"
+    channels:
+      - {
+          index: 0x6063,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis1/internal_position,
+        } # Position Actual Internal
+      - {
+          index: 0x6064,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis1/position,
+        } # Position Actual Value
+      - {
+          index: 0x606c,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis1/velocity,
+        } # Velocity Actual Value
+      - {
+          index: 0x6078,
+          sub_index: 0x00,
+          type: int16,
+          state_interface: axis1/effort,
+        } # Current Actual Value
+      - {
+          index: 0x6041,
+          sub_index: 0x00,
+          type: uint16,
+          state_interface: axis1/status_word,
+        } # Statusword
+      - {
+          index: 0x2310,
+          sub_index: 0x01,
+          type: uint16,
+          state_interface: axis1/force_x,
+          factor: 0.003333333,
+          offset: -100,
+        } # Number of E1
+      - {
+          index: 0x2310,
+          sub_index: 0x02,
+          type: uint16,
+          state_interface: axis1/force_y,
+          factor: 0.003333333,
+          offset: -100,
+        } # Number of E2
+      - {
+          index: 0x2310,
+          sub_index: 0x03,
+          type: uint16,
+          state_interface: axis1/force_z,
+          factor: 0.003333333,
+          offset: -100,
+        } # Number of E3
+      - {
+          index: 0x603f,
+          sub_index: 0x00,
+          type: uint16,
+          state_interface: axis1/error_code,
+        } # Error Code
+
+  - index: "0x1a10"
+    channels:
+      - {
+          index: 0x6863,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis2/internal_position,
+        } # Position Actual Internal
+      - {
+          index: 0x6864,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis2/position,
+        } # Position Actual Value
+      - {
+          index: 0x686c,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis2/velocity,
+        } # Velocity Actual Value
+      - {
+          index: 0x6878,
+          sub_index: 0x00,
+          type: int16,
+          state_interface: axis2/effort,
+        } # Current Actual Value
+      - {
+          index: 0x6841,
+          sub_index: 0x00,
+          type: uint16,
+          state_interface: axis2/status_word,
+        } # Statusword
+      - {
+          index: 0x2b10,
+          sub_index: 0x01,
+          type: uint16,
+          state_interface: axis2/torque_x,
+          factor: 0.00002,
+          offset: -0.6,
+        } # Number of E1
+      - {
+          index: 0x2b10,
+          sub_index: 0x02,
+          type: uint16,
+          state_interface: axis2/torque_y,
+          factor: 0.00002,
+          offset: -0.6,
+        } # Number of E2
+      - {
+          index: 0x2b10,
+          sub_index: 0x03,
+          type: uint16,
+          state_interface: axis2/torque_z,
+          factor: 0.00002,
+          offset: -0.6,
+        } # Number of E3
+      - {
+          index: 0x683f,
+          sub_index: 0x00,
+          type: uint16,
+          state_interface: axis2/error_code,
+        } # Error Code
+
+  - index: "0x1a20"
+    channels:
+      - {
+          index: 0x7063,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis3/internal_position,
+        } # Position Actual Internal
+      - {
+          index: 0x7064,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis3/position,
+        } # Position Actual Value
+      - {
+          index: 0x706c,
+          sub_index: 0x00,
+          type: int32,
+          state_interface: axis3/velocity,
+        } # Velocity Actual Value
+      - {
+          index: 0x7078,
+          sub_index: 0x00,
+          type: int16,
+          state_interface: axis3/effort,
+        } # Current Actual Value
+      - {
+          index: 0x7041,
+          sub_index: 0x00,
+          type: uint16,
+          state_interface: axis3/status_word,
+        } # Statusword
+      - {
+          index: 0x703f,
+          sub_index: 0x01,
+          type: uint16,
+          state_interface: axis3/error_code,
+        } # Error Code
+      - { index: 0x703f, sub_index: 0x02, type: uint16 } # Error Code
+
+sm: # default
+  - { index: 0, type: output, pdo: ~, watchdog: disable }
+  - { index: 1, type: input, pdo: ~, watchdog: disable }
+  - { index: 2, type: output, pdo: rpdo, watchdog: enable }
+  - { index: 3, type: input, pdo: tpdo, watchdog: disable }

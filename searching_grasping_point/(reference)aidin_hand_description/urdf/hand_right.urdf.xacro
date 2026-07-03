@@ -1,0 +1,1325 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="right_hand" 
+              params="parent:='world' prefix:='right_' *origin "> <!-- xyz:='0 0 0' rpy:='0 0 0'" -->
+
+    <!-- Joint connecting to parent -->
+    <joint name="${prefix}hand_base_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}hand_base_link"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+    
+    <link name="${prefix}hand_base_link">
+      <visual>
+          <origin xyz="0 0 0" rpy="0 0 0" />
+          <geometry>
+            <mesh filename="package://aidin_hand_description/meshes/visual/body_right.STL" />
+          </geometry>
+          <material name="">
+            <color rgba="0.22353 0.22353 0.22353 1" />
+          </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://aidin_hand_description/meshes/collision/body_right_collision.STL" />
+        </geometry>
+      </collision>
+      <inertial>
+        <origin
+          xyz="-0.00078195 0.0062725 0.091912"
+          rpy="0 0 0" />
+        <mass
+          value="0.96362" />
+        <inertia
+          ixx="0.00040749"
+          ixy="1.8229E-05"
+          ixz="9.0692E-06"
+          iyy="0.00061402"
+          iyz="1.8795E-05"
+          izz="0.00060699" />
+      </inertial>
+    </link>
+
+    <link
+      name="${prefix}link1_thumb">
+      <inertial>
+        <origin
+          xyz="-2.0882E-10 -0.00032135 0.0045852"
+          rpy="0 0 0" />
+        <mass
+          value="0.0035917" />
+        <inertia
+          ixx="4.6019E-08"
+          ixy="3.5431E-15"
+          ixz="-2.4342E-15"
+          iyy="1.4617E-07"
+          iyz="8.4649E-10"
+          izz="1.1542E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link1_thumb.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0"/>
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link1_thumb_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}thumb_joint1" type="revolute">
+      <origin
+        xyz="-0.027991 0.052822 0.07115"
+        rpy="0 0 0.38397" />
+      <parent
+        link="${prefix}hand_base_link" />
+      <child
+        link="${prefix}link1_thumb" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="-0.5236"
+        upper="0.5236"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link2_thumb">
+      <inertial>
+        <origin
+          xyz="0.021726 0.016185 -1.2614E-07"
+          rpy="0 0 0" />
+        <mass
+          value="0.012509" />
+        <inertia
+          ixx="1.0581E-06"
+          ixy="-7.3153E-07"
+          ixz="-2.0968E-12"
+          iyy="1.1422E-06"
+          iyz="-3.7672E-12"
+          izz="1.6455E-06" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link2_thumb.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.79216 0.81961 0.93333 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link2_thumb_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}thumb_joint2" type="revolute">
+      <origin
+        xyz="0 0 0.01035"
+        rpy="-1.5708 -1.0703 1.5708" />
+      <parent
+        link="${prefix}link1_thumb" />
+      <child
+        link="${prefix}link2_thumb" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.0471975"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link3_thumb">
+      <inertial>
+        <origin
+          xyz="-0.010558 -0.012729 -2.0756E-05"
+          rpy="0 0 0" />
+        <mass
+          value="0.010399" />
+        <inertia
+          ixx="6.4388E-07"
+          ixy="-4.4349E-07"
+          ixz="4.2316E-10"
+          iyy="7.1496E-07"
+          iyz="-3.9503E-10"
+          izz="1.05E-06" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link3_thumb.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.79216 0.81961 0.93333 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link3_thumb_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}thumb_joint3" type="revolute">
+      <origin
+        xyz="0.037446 0.031946 0"
+        rpy="0 0 2.9705" />
+      <parent
+        link="${prefix}link2_thumb" />
+      <child
+        link="${prefix}link3_thumb" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.0471975"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link4_thumb">
+      <inertial>
+        <origin
+          xyz="-0.00045452 0.013538 1.9744E-07"
+          rpy="0 0 0" />
+        <mass
+          value="0.009252" />
+        <inertia
+          ixx="6.5738E-07"
+          ixy="1.3358E-07"
+          ixz="-5.4821E-12"
+          iyy="4.3827E-07"
+          iyz="-9.0841E-12"
+          izz="5.8665E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link4_thumb.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link4_thumb_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}thumb_joint4" type="revolute">
+      <origin
+        xyz="-0.02655 -0.029922 0"
+        rpy="0 0 2.3512" />
+      <parent
+        link="${prefix}link3_thumb" />
+      <child
+        link="${prefix}link4_thumb" />
+      <axis
+        xyz="0 0 -1" />
+      <mimic 
+        joint="${prefix}thumb_joint3"
+        multiplier="1.0"
+        offset="0.0" />
+      <limit
+        lower="0.0"
+        upper="1.0471975"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link1_index">
+      <inertial>
+        <origin
+          xyz="-2.0882E-10 -0.00032135 0.0045852"
+          rpy="0 0 0" />
+        <mass
+          value="0.0035917" />
+        <inertia
+          ixx="4.6019E-08"
+          ixy="3.5431E-15"
+          ixz="-2.4342E-15"
+          iyy="1.4617E-07"
+          iyz="8.4649E-10"
+          izz="1.1542E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link1.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link1_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}index_joint1" type="revolute">
+      <origin
+        xyz="-0.0403 -0.00031 0.17395"
+        rpy="1.5708 0 3.1416" />
+      <parent
+        link="${prefix}hand_base_link" />
+      <child
+        link="${prefix}link1_index" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="-0.5236"
+        upper="0.5236"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link2_index">
+      <inertial>
+        <origin
+          xyz="0.020755 0.01379 -1.1732E-06"
+          rpy="0 0 0" />
+        <mass
+          value="0.01267" />
+        <inertia
+          ixx="1.0669E-06"
+          ixy="-6.5356E-07"
+          ixz="-8.0013E-11"
+          iyy="1.0065E-06"
+          iyz="-1.1733E-10"
+          izz="1.5287E-06" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link2.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link2_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}index_joint2" type="revolute">
+      <origin
+        xyz="0 0 0.01035"
+        rpy="-1.5708 -0.78674 1.5708" />
+      <parent
+        link="${prefix}link1_index" />
+      <child
+        link="${prefix}link2_index" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.5707963"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+    
+    <link
+      name="${prefix}link3_index">
+      <inertial>
+        <origin
+          xyz="-0.006719 -0.0092478 -2.0377E-08"
+          rpy="0 0 0" />
+        <mass
+          value="0.0079187" />
+        <inertia
+          ixx="2.888E-07"
+          ixy="-1.4814E-07"
+          ixz="2.137E-12"
+          iyy="3.6163E-07"
+          iyz="5.3149E-12"
+          izz="4.4045E-07" />
+      </inertial>      
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link3.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.75294 0.75294 0.75294 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link3_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}index_joint3" type="revolute">
+      <origin
+        xyz="0.034618 0.029118 0"
+        rpy="0 0 3.0684" />
+      <parent
+        link="${prefix}link2_index" />
+      <child
+        link="${prefix}link3_index" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.134464"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link4_index">
+      <inertial>
+        <origin
+          xyz="-0.00045453 0.013538 1.9001E-07"
+          rpy="0 0 0" />
+        <mass
+          value="0.009252" />
+        <inertia
+          ixx="6.5738E-07"
+          ixy="1.3358E-07"
+          ixz="-5.5427E-12"
+          iyy="4.3827E-07"
+          iyz="-8.5481E-12"
+          izz="5.8665E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link4.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link4_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}index_joint4" type="revolute">
+      <origin
+        xyz="-0.018259 -0.020566 0"
+        rpy="0 0 2.5468" />
+      <parent
+        link="${prefix}link3_index" />
+      <child
+        link="${prefix}link4_index" />
+      <axis
+        xyz="0 0 -1" />
+      <mimic 
+        joint="${prefix}index_joint3"
+        multiplier="1.0"
+        offset="0.0" />
+      <limit
+        lower="0.0"
+        upper="1.134464"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link1_middle">
+      <inertial>
+        <origin
+          xyz="-2.0882E-10 -0.00032135 0.0045852"
+          rpy="0 0 0" />
+        <mass
+          value="0.0035917" />
+        <inertia
+          ixx="4.6019E-08"
+          ixy="3.5431E-15"
+          ixz="-2.4342E-15"
+          iyy="1.4617E-07"
+          iyz="8.4649E-10"
+          izz="1.1542E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link1.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link1_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+    <joint
+      name="${prefix}middle_joint1"
+      type="revolute">
+      <origin
+        xyz="-0.0135 -0.00031 0.19145"
+        rpy="1.5708 0 3.1416" />
+      <parent
+        link="${prefix}hand_base_link" />
+      <child
+        link="${prefix}link1_middle" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="-0.5236"
+        upper="0.5236"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link2_middle">
+      <inertial>
+        <origin
+          xyz="0.020755 0.01379 -1.1732E-06"
+          rpy="0 0 0" />
+        <mass
+          value="0.01267" />
+        <inertia
+          ixx="1.0669E-06"
+          ixy="-6.5356E-07"
+          ixz="-8.0013E-11"
+          iyy="1.0065E-06"
+          iyz="-1.1733E-10"
+          izz="1.5287E-06" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link2.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link2_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}middle_joint2"
+      type="revolute">
+      <origin
+        xyz="0 0 0.01035"
+        rpy="-1.5708 -0.78674 1.5708" />
+      <parent
+        link="${prefix}link1_middle" />
+      <child
+        link="${prefix}link2_middle" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.5707963"
+        effort="10.0"
+        velocity="1.5707963"/>
+    </joint>
+
+    <link
+      name="${prefix}link3_middle">
+      <inertial>
+        <origin
+          xyz="-0.006719 -0.0092478 -2.0377E-08"
+          rpy="0 0 0" />
+        <mass
+          value="0.0079187" />
+        <inertia
+          ixx="2.888E-07"
+          ixy="-1.4814E-07"
+          ixz="2.137E-12"
+          iyy="3.6163E-07"
+          iyz="5.3149E-12"
+          izz="4.4045E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link3.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.75294 0.75294 0.75294 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link3_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}middle_joint3"
+      type="revolute">
+      <origin
+        xyz="0.034618 0.029118 0"
+        rpy="0 0 3.0684" />
+      <parent
+        link="${prefix}link2_middle" />
+      <child
+        link="${prefix}link3_middle" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.134464"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link4_middle">
+      <inertial>
+        <origin
+          xyz="-0.00045453 0.013538 1.9001E-07"
+          rpy="0 0 0" />
+        <mass
+          value="0.009252" />
+        <inertia
+          ixx="6.5738E-07"
+          ixy="1.3358E-07"
+          ixz="-5.5427E-12"
+          iyy="4.3827E-07"
+          iyz="-8.5481E-12"
+          izz="5.8665E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link4.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link4_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}middle_joint4"
+      type="revolute">
+      <origin
+        xyz="-0.018259 -0.020566 0"
+        rpy="0 0 2.5468" />
+      <parent
+        link="${prefix}link3_middle" />
+      <child
+        link="${prefix}link4_middle" />
+      <axis
+        xyz="0 0 -1" />
+      <mimic 
+        joint="${prefix}middle_joint3"
+        multiplier="1.0"
+        offset="0.0" />
+      <limit
+        lower="0.0"
+        upper="1.134464"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link1_ring">
+      <inertial>
+        <origin
+          xyz="-2.0882E-10 -0.00032135 0.0045852"
+          rpy="0 0 0" />
+        <mass
+          value="0.0035917" />
+        <inertia
+          ixx="4.6019E-08"
+          ixy="3.5431E-15"
+          ixz="-2.4342E-15"
+          iyy="1.4617E-07"
+          iyz="8.4649E-10"
+          izz="1.1542E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link1.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link1_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}ring_joint1"
+      type="revolute">
+      <origin
+        xyz="0.0133 -0.00031 0.17395"
+        rpy="1.5708 0 3.1416" />
+      <parent
+        link="${prefix}hand_base_link" />
+      <child
+        link="${prefix}link1_ring" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="-0.5236"
+        upper="0.5236"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link2_ring">
+      <inertial>
+        <origin
+          xyz="0.020755 0.01379 -1.1732E-06"
+          rpy="0 0 0" />
+        <mass
+          value="0.01267" />
+        <inertia
+          ixx="1.0669E-06"
+          ixy="-6.5356E-07"
+          ixz="-8.0013E-11"
+          iyy="1.0065E-06"
+          iyz="-1.1733E-10"
+          izz="1.5287E-06" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link2.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link2_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}ring_joint2"
+      type="revolute">
+      <origin
+        xyz="0 0 0.01035"
+        rpy="-1.5708 -0.78674 1.5708" />
+      <parent
+        link="${prefix}link1_ring" />
+      <child
+        link="${prefix}link2_ring" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.5707963"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link3_ring">
+      <inertial>
+        <origin
+          xyz="-0.006719 -0.0092478 -2.0377E-08"
+          rpy="0 0 0" />
+        <mass
+          value="0.0079187" />
+        <inertia
+          ixx="2.888E-07"
+          ixy="-1.4814E-07"
+          ixz="2.137E-12"
+          iyy="3.6163E-07"
+          iyz="5.3149E-12"
+          izz="4.4045E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link3.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.75294 0.75294 0.75294 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link3_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}ring_joint3"
+      type="revolute">
+      <origin
+        xyz="0.034618 0.029118 0"
+        rpy="0 0 3.0684" />
+      <parent
+        link="${prefix}link2_ring" />
+      <child
+        link="${prefix}link3_ring" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.134464"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link4_ring">
+      <inertial>
+        <origin
+          xyz="-0.00045453 0.013538 1.9001E-07"
+          rpy="0 0 0" />
+        <mass
+          value="0.009252" />
+        <inertia
+          ixx="6.5738E-07"
+          ixy="1.3358E-07"
+          ixz="-5.5427E-12"
+          iyy="4.3827E-07"
+          iyz="-8.5481E-12"
+          izz="5.8665E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link4.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link4_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}ring_joint4"
+      type="revolute">
+      <origin
+        xyz="-0.018259 -0.020566 0"
+        rpy="0 0 2.5468" />
+      <parent
+        link="${prefix}link3_ring" />
+      <child
+        link="${prefix}link4_ring" />
+      <axis
+        xyz="0 0 -1" />
+      <mimic 
+        joint="${prefix}ring_joint3"
+        multiplier="1.0"
+        offset="0.0" />
+      <limit
+        lower="0.0"
+        upper="1.134464"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link1_baby">
+      <inertial>
+        <origin
+          xyz="-2.0882E-10 -0.00032135 0.0045852"
+          rpy="0 0 0" />
+        <mass
+          value="0.0035917" />
+        <inertia
+          ixx="4.6019E-08"
+          ixy="3.5431E-15"
+          ixz="-2.4342E-15"
+          iyy="1.4617E-07"
+          iyz="8.4649E-10"
+          izz="1.1542E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link1.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link1_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+    <joint
+      name="${prefix}baby_joint1"
+      type="revolute">
+      <origin
+        xyz="0.0401 -0.00031 0.15845"
+        rpy="1.5708 0 3.1416" />
+      <parent
+        link="${prefix}hand_base_link" />
+      <child
+        link="${prefix}link1_baby" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="-0.5236"
+        upper="0.5236"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link2_baby">
+      <inertial>
+        <origin
+          xyz="0.020755 0.01379 -1.1732E-06"
+          rpy="0 0 0" />
+        <mass
+          value="0.01267" />
+        <inertia
+          ixx="1.0669E-06"
+          ixy="-6.5356E-07"
+          ixz="-8.0013E-11"
+          iyy="1.0065E-06"
+          iyz="-1.1733E-10"
+          izz="1.5287E-06" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link2.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link2_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}baby_joint2"
+      type="revolute">
+      <origin
+        xyz="0 0 0.01035"
+        rpy="-1.5708 -0.78674 1.5708" />
+      <parent
+        link="${prefix}link1_baby" />
+      <child
+        link="${prefix}link2_baby" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0"
+        upper="1.5707963"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link3_baby">
+      <inertial>
+        <origin
+          xyz="-0.006719 -0.0092478 -2.0377E-08"
+          rpy="0 0 0" />
+        <mass
+          value="0.0079187" />
+        <inertia
+          ixx="2.888E-07"
+          ixy="-1.4814E-07"
+          ixz="2.137E-12"
+          iyy="3.6163E-07"
+          iyz="5.3149E-12"
+          izz="4.4045E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link3.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.75294 0.75294 0.75294 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link3_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}baby_joint3"
+      type="revolute">
+      <origin
+        xyz="0.034618 0.029118 0"
+        rpy="0 0 3.0684" />
+      <parent
+        link="${prefix}link2_baby" />
+      <child
+        link="${prefix}link3_baby" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0.0"
+        upper="1.134464"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+
+    <link
+      name="${prefix}link4_baby">
+      <inertial>
+        <origin
+          xyz="-0.00045453 0.013538 1.9001E-07"
+          rpy="0 0 0" />
+        <mass
+          value="0.009252" />
+        <inertia
+          ixx="6.5738E-07"
+          ixy="1.3358E-07"
+          ixz="-5.5427E-12"
+          iyy="4.3827E-07"
+          iyz="-8.548E-12"
+          izz="5.8665E-07" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/visual/link4.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.77647 0.75686 0.73725 1" />
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://aidin_hand_description/meshes/collision/link4_collision.STL" />
+        </geometry>
+      </collision>
+    </link>
+
+    <joint
+      name="${prefix}baby_joint4"
+      type="revolute">
+      <origin
+        xyz="-0.018259 -0.020566 0"
+        rpy="0 0 2.5468" />
+      <parent
+        link="${prefix}link3_baby" />
+      <child
+        link="${prefix}link4_baby" />
+      <axis
+        xyz="0 0 -1" />
+      <mimic 
+        joint="${prefix}baby_joint3"
+        multiplier="1.0"
+        offset="0.0" />
+      <limit
+        lower="0.0"
+        upper="1.134464"
+        effort="10.0"
+        velocity="1.5707963" />
+    </joint>
+    
+    <!-- tactile sensor frames -->
+    <link name="${prefix}baby_frame">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+      </visual>
+    </link>
+
+    <joint name="${prefix}baby_joint_tactile" type="fixed">
+      <origin xyz="0 0.01 0" rpy="0 0 0" />
+      <parent link="${prefix}link4_baby" />
+      <child link="${prefix}baby_frame" />
+    </joint>
+
+
+    <link name="${prefix}ring_frame">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+      </visual>
+    </link>
+
+    <joint name="${prefix}ring_joint_tactile" type="fixed">
+      <origin xyz="0 0.01 0" rpy="0 0 0" />
+      <parent link="${prefix}link4_ring" />
+      <child link="${prefix}ring_frame" />
+    </joint>
+
+    <link name="${prefix}middle_frame">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+      </visual>
+    </link>
+
+    <joint name="${prefix}middle_joint_tactile" type="fixed">
+      <origin xyz="0 0.01 0" rpy="0 0 0" />
+      <parent link="${prefix}link4_middle" />
+      <child link="${prefix}middle_frame" />
+    </joint>
+
+    <link name="${prefix}index_frame">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+      </visual>
+    </link>
+
+    <joint name="${prefix}index_joint_tactile" type="fixed">
+      <origin xyz="0 0.01 0" rpy="0 0 0" />
+      <parent link="${prefix}link4_index" />
+      <child link="${prefix}index_frame" />
+    </joint>
+
+    <link name="${prefix}thumb_frame">
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+      </visual>
+    </link>
+
+    <joint name="${prefix}thumb_joint_tactile" type="fixed">
+      <origin xyz="0 0.01 0" rpy="0 0 0" />
+      <parent link="${prefix}link4_thumb" />
+      <child link="${prefix}thumb_frame" />
+    </joint>
+
+  </xacro:macro>
+
+</robot>

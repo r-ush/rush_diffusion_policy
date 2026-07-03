@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <xacro:macro name="finger_encoder" params="joint_name axis_num ec_module_name alias position mode_of_operation">
+        <joint name="${joint_name}">
+            <command_interface name="axis${axis_num}/position"/>
+            <command_interface name="axis${axis_num}/velocity"/>
+            <command_interface name="axis${axis_num}/effort"/>
+            <command_interface name="axis${axis_num}/maximum_effort"/>
+            <command_interface name="axis${axis_num}/control_word"/>
+            <command_interface name="axis${axis_num}/mode_of_operation"/>
+            <state_interface name="axis${axis_num}/internal_position"/>
+            <state_interface name="axis${axis_num}/position"/>
+            <state_interface name="axis${axis_num}/velocity"/>
+            <state_interface name="axis${axis_num}/effort"/>
+            <state_interface name="axis${axis_num}/status_word"/>
+            <state_interface name="axis${axis_num}/error_code"/>
+            <xacro:if value="${axis_num == 1}">
+                <state_interface name="axis${axis_num}/force_x"/>
+                <state_interface name="axis${axis_num}/force_y"/>
+                <state_interface name="axis${axis_num}/force_z"/>
+            </xacro:if>
+            <xacro:if value="${axis_num == 2}">
+                <state_interface name="axis${axis_num}/torque_x"/>
+                <state_interface name="axis${axis_num}/torque_y"/>
+                <state_interface name="axis${axis_num}/torque_z"/>
+            </xacro:if>
+            <ec_module name="${ec_module_name}">
+                <plugin>ethercat_generic_plugins/GenericEcSlave</plugin>
+                <param name="alias">${alias}</param>
+                <param name="position">${position}</param>
+                <param name="mode_of_operation">${mode_of_operation}</param>
+                <param name="slave_config">$(find aidin_hand_description)/config/welcon_slave.yaml</param>
+            </ec_module>
+        </joint>
+    </xacro:macro>
+
+    <xacro:macro name="finger_joint" params="joint_name">
+        <joint name="${joint_name}">
+            <state_interface name="position"/>
+            <command_interface name="position"/>
+        </joint>
+    </xacro:macro>
+
+    <xacro:macro name="hand_control" params="hand_prefix:='' hand_alias:='' hand_position:='' control_frequency:=1000">
+
+        <!-- Encoder position -->
+        <xacro:finger_encoder joint_name="${hand_prefix}thumb_encoder1" axis_num="1" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}thumb_encoder2" axis_num="2" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}thumb_encoder3" axis_num="3" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position}" mode_of_operation="8"/>
+
+        <xacro:finger_encoder joint_name="${hand_prefix}index_encoder1" axis_num="1" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 1}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}index_encoder2" axis_num="2" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 1}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}index_encoder3" axis_num="3" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 1}" mode_of_operation="8"/>
+
+        <xacro:finger_encoder joint_name="${hand_prefix}middle_encoder1" axis_num="1" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 2}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}middle_encoder2" axis_num="2" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 2}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}middle_encoder3" axis_num="3" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 2}" mode_of_operation="8"/>
+
+        <xacro:finger_encoder joint_name="${hand_prefix}ring_encoder1" axis_num="1" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 3}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}ring_encoder2" axis_num="2" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 3}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}ring_encoder3" axis_num="3" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 3}" mode_of_operation="8"/>
+
+        <xacro:finger_encoder joint_name="${hand_prefix}baby_encoder1" axis_num="1" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 4}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}baby_encoder2" axis_num="2" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 4}" mode_of_operation="8"/>
+        <xacro:finger_encoder joint_name="${hand_prefix}baby_encoder3" axis_num="3" ec_module_name="ec_module" alias="${hand_alias}" position="${hand_position + 4}" mode_of_operation="8"/>
+
+        <!-- Joint position -->
+        <xacro:finger_joint joint_name="${hand_prefix}thumb_joint1"/>
+        <xacro:finger_joint joint_name="${hand_prefix}thumb_joint2"/>
+        <xacro:finger_joint joint_name="${hand_prefix}thumb_joint3"/>
+
+        <xacro:finger_joint joint_name="${hand_prefix}index_joint1"/>
+        <xacro:finger_joint joint_name="${hand_prefix}index_joint2"/>
+        <xacro:finger_joint joint_name="${hand_prefix}index_joint3"/>
+
+        <xacro:finger_joint joint_name="${hand_prefix}middle_joint1"/>
+        <xacro:finger_joint joint_name="${hand_prefix}middle_joint2"/>
+        <xacro:finger_joint joint_name="${hand_prefix}middle_joint3"/>
+
+        <xacro:finger_joint joint_name="${hand_prefix}ring_joint1"/>
+        <xacro:finger_joint joint_name="${hand_prefix}ring_joint2"/>
+        <xacro:finger_joint joint_name="${hand_prefix}ring_joint3"/>
+
+        <xacro:finger_joint joint_name="${hand_prefix}baby_joint1"/>
+        <xacro:finger_joint joint_name="${hand_prefix}baby_joint2"/>
+        <xacro:finger_joint joint_name="${hand_prefix}baby_joint3"/>
+
+    </xacro:macro>
+</robot>
