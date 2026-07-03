@@ -6,8 +6,12 @@ data
 data_local
 .vscode
 _wandb
-action_denoising_results
 data_process/erase_board_force_data
+
+# action_denoising_results: keep visualize scripts + explanation notes, drop heavy result outputs
+action_denoising_results/**/*.png
+action_denoising_results/**/*.tsv
+action_denoising_results/**/*.jpg
 
 # Virtual environments
 venv_dp/
@@ -26,6 +30,20 @@ tea_debug.log
 
 # Experiment data files (keep on SSD)
 *.csv
+
+# Large datasets / temp data (keep on SSD, not in git)
+*.zip
+searching_grasping_point/dataset_temp/
+searching_grasping_point/*.hdf5
+data_process/*.hdf5
+pigdm_test/data/
+
+# searching_grasping_point vendored reference pkg: keep code, drop heavy binary assets & build output
+searching_grasping_point/**/*.STL
+searching_grasping_point/**/*.stl
+searching_grasping_point/**/install/
+searching_grasping_point/**/build/
+searching_grasping_point/**/log/
 
 # Image augmentation test results
 bae_image_augmentation_test/
