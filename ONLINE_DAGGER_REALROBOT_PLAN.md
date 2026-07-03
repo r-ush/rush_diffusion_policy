@@ -9,6 +9,34 @@
 
 ---
 
+## ✅ 구현 상태 (2026-07-03 완료)
+
+이 문서의 §1~§5를 모두 구현했다. 로봇 없이 가능한 검증은 통과.
+
+| # | 작업 | 결과 |
+|---|------|------|
+| 1 | `relabel_utils.py` 영상 디코드(`load_episode_frames`, read_video 재사용) + `relabel_last_episode_to_hdf5(replay_buffer, env_output_dir, ...)` 시그니처 변경 | ✅ 구현·임포트 OK |
+| 2 | `rush_replay_buffer_to_correction_hdf5.py` — `--input`을 env output_dir로, 영상 디코드 사용 | ✅ 구현·임포트 OK |
+| 3 | actor를 `RightarmRealEnvImp` 기반으로 재작성 (hf_hub shim / click CLI / pose_repr 분기 / steps_per_inference 절단 / max_duration / 새 relabel 시그니처 / hot-swap) | ✅ 구현·컴파일 OK (로봇 실행만 미검증) |
+| 4 | `config_online.py` env override(`ONLINE_BASE_CKPT`/`ONLINE_BASE_DATASET`/`ONLINE_NUM_BASE_DEMOS`) + 실로봇 권장 기본값 / `online_learner.py --input` | ✅ 구현 OK |
+| 5 | `rush_eval_real_robot_imp_right.py`에 C/S/D + stages 기록 | ✅ 구현·컴파일 OK |
+
+**검증 내역**
+- 전 파일 `py_compile` 통과.
+- `smoke_test_no_robot.py` 전체 통과 (전송→학습 라운드→v1 발행→hot-swap(missing=0/unexpected=0)→predict_action).
+  - 단, 이 개발 머신엔 `epoch=0700` ckpt와 `..._des.hdf5`가 더 이상 없어
+    `ONLINE_BASE_CKPT=.../checkpoints/latest.ckpt`, `ONLINE_BASE_DATASET=.../20260630_195919_diffusion_des_10.hdf5`
+    로 override해 실행함. **로봇 PC에서도 실제 ckpt/데이터셋 경로를 -i / 환경변수로 지정할 것**
+    (config 기본값은 이 머신 기준의 stale 경로).
+- **영상 디코드 정렬 검증**: env와 동일한 `VideoRecorder` 경로로 30프레임 합성 mp4를 만들고
+  `load_episode_frames`로 디코드 → 30/30 프레임, 순서(밝기 단조성) 일치 확인. 즉 frame k ↔
+  obs step k 1:1 정렬이 실제로 성립함.
+
+**로봇에서 남은 검증** (§6 체크리스트): 실제 카메라·팔에서 actor 실행, relabel 이미지가
+카메라와 색상/정렬 맞는지(§1-3), correction stage 기록, hot-swap 후 거동.
+
+---
+
 ## 0. 실코드 확인 결과 (이번에 새로 파악된 사실)
 
 실제 로봇 inference 코드는 **오른팔** `rush_eval_real_robot_imp_right.py`이며

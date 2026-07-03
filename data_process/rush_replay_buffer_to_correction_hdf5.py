@@ -1,6 +1,6 @@
 """
-rush_eval_real_robot_imp.py로 수집한 correction 에피소드
-(<output_dir>/replay_buffer.zarr, LeftarmRealEnvImp 포맷)를
+rush_eval_real_robot_imp*.py로 수집한 correction 에피소드
+(<output_dir>/replay_buffer.zarr + <output_dir>/videos/, Rightarm/LeftarmRealEnvImp 포맷)를
 학습용 HDF5(rush_logistic_box_pose_only.yaml과 동일 포맷)로 변환한다.
 
 핵심 아이디어 (hindsight relabeling):
@@ -12,15 +12,20 @@ rush_eval_real_robot_imp.py로 수집한 correction 에피소드
   거의 동일한 타깃이 나온다 — 즉 이 변환은 correction 여부와 무관하게 항상 적용
   가능한 일관된 방식이다.)
 
-  correction 여부(rush_eval_real_robot_imp.py에서 'C' 키로 토글, `stage` 필드)가
-  1인 스텝이 하나라도 포함된 에피소드는, --oversample 배수만큼 통째로 복제해서
-  출력 HDF5에 더 많이 등장시킬 수 있다 (기존 dataset 클래스 코드를 건드리지 않고
-  샘플링 비중을 높이는 가장 간단한 방법).
+  correction 여부('C' 키로 토글, `stage` 필드)가 1인 스텝이 하나라도 포함된 에피소드는,
+  --oversample 배수만큼 통째로 복제해서 출력 HDF5에 더 많이 등장시킬 수 있다.
+
+⚠️ 이미지는 replay_buffer.zarr에 없다. env는 lowdim(pose/quat/stage)만 zarr에 저장하고,
+   이미지는 <output_dir>/videos/{ep}/{cam}.mp4 에만 있다. 따라서 --input 은
+   replay_buffer.zarr 가 아니라 **env output_dir**(zarr와 videos/를 모두 포함하는 폴더)를
+   가리켜야 하며, 이미지는 온라인 경로와 동일하게 read_video로 디코드한다
+   (online_learning/relabel_utils.load_episode_frames).
 
 입력:
-  <replay_buffer_root>/replay_buffer.zarr
-    keys: image0 (T,H,W,3) float32 [0,1], robot_pose_L (T,3), robot_quat_L (T,4,)
-          action (T,9), stage (T,), timestamp (T,), meta/episode_ends
+  <env_output_dir>/
+    replay_buffer.zarr   keys: robot_pose_L (T,3), robot_quat_L (T,4), action (T,9),
+                               stage (T,), timestamp (T,), meta/episode_ends
+    videos/{ep}/{cam}.mp4  obs 해상도 RGB, frequency fps
 
 출력 HDF5:
   data/demo_i/actions          (T-1, 9)  pos(3,m) + rot6d(6), achieved-pose 기준
@@ -31,17 +36,25 @@ rush_eval_real_robot_imp.py로 수집한 correction 에피소드
 사용법:
   conda activate robodiff
   python data_process/rush_replay_buffer_to_correction_hdf5.py \
-      --input /home/rush/data/results/replay_buffer.zarr \
+      --input /home/rush/data/results \
       --output /home/rush/Desktop/Datasets/correction_batch1.hdf5 \
-      --oversample 3
+      --oversample 3 --frequency 10
 """
 
+import os
+import sys
 import argparse
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
 import h5py
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from diffusion_policy.common.replay_buffer import ReplayBuffer
+from online_learning.relabel_utils import load_episode_frames
 
 
 def pose_quat_to_9d(pos, quat):
@@ -53,15 +66,25 @@ def pose_quat_to_9d(pos, quat):
     return np.concatenate([pos, rot6d], axis=1).astype(np.float32)
 
 
-def convert(input_zarr, output_hdf5, oversample=1, min_episode_len=3):
-    buffer = ReplayBuffer.create_from_path(input_zarr, mode='r')
-    print(f"입력: {input_zarr}")
+def convert(input_dir, output_hdf5, oversample=1, min_episode_len=3,
+            frequency=10.0, cam_idx=0):
+    input_dir = os.path.abspath(os.path.expanduser(input_dir))
+    zarr_path = os.path.join(input_dir, "replay_buffer.zarr")
+    if not os.path.exists(zarr_path):
+        # 하위호환: --input에 바로 zarr 경로를 준 경우 상위 폴더를 output_dir로 사용
+        if input_dir.endswith("replay_buffer.zarr"):
+            zarr_path = input_dir
+            input_dir = os.path.dirname(input_dir)
+        else:
+            raise FileNotFoundError(f"replay_buffer.zarr 없음: {zarr_path}")
+
+    buffer = ReplayBuffer.create_from_path(zarr_path, mode='r')
+    print(f"입력 output_dir: {input_dir}")
     print(f"에피소드 수: {buffer.n_episodes}, 총 스텝 수: {buffer.n_steps}")
 
     episode_ends = buffer.episode_ends[:]
     episode_starts = np.concatenate([[0], episode_ends[:-1]])
 
-    image0 = buffer['image0']
     robot_pose_L = buffer['robot_pose_L']
     robot_quat_L = buffer['robot_quat_L']
     stage = buffer['stage'] if 'stage' in buffer.keys() else None
@@ -79,10 +102,19 @@ def convert(input_zarr, output_hdf5, oversample=1, min_episode_len=3):
                 print(f"  episode {ep_i}: 너무 짧음 ({T} steps), 건너뜀")
                 continue
 
-            ep_image0 = image0[start:end]
             ep_pose = robot_pose_L[start:end]
             ep_quat = robot_quat_L[start:end]
             ep_stage = stage[start:end] if stage is not None else np.zeros(T, dtype=np.int64)
+
+            # 이미지는 영상에서 디코드 (frame k ↔ obs step k)
+            ep_image0 = load_episode_frames(
+                input_dir, ep_i, n_steps=T, cam_idx=cam_idx, frequency=frequency)
+            # lowdim/영상 길이 정합 (짧은 쪽 기준)
+            T = min(T, len(ep_image0))
+            ep_pose = ep_pose[:T]
+            ep_quat = ep_quat[:T]
+            ep_stage = ep_stage[:T]
+            ep_image0 = ep_image0[:T]
 
             # obs: [0, T-1), action(achieved pose): [1, T)  -- 한 스텝 앞의 실제 도달 pose
             obs_image0 = ep_image0[:T - 1]
@@ -93,12 +125,7 @@ def convert(input_zarr, output_hdf5, oversample=1, min_episode_len=3):
             action_correction_flag = ep_stage[1:T]
 
             actions_9d = pose_quat_to_9d(achieved_pose, achieved_quat)
-
-            # image0가 [0,1] float으로 저장되어 있으면 uint8로 되돌림
-            if np.issubdtype(obs_image0.dtype, np.floating):
-                images_uint8 = np.clip(obs_image0 * 255.0, 0, 255).astype(np.uint8)
-            else:
-                images_uint8 = obs_image0.astype(np.uint8)
+            images_uint8 = obs_image0.astype(np.uint8)
 
             has_correction = bool(np.any(action_correction_flag))
             n_copies = oversample if has_correction else 1
@@ -125,12 +152,18 @@ def convert(input_zarr, output_hdf5, oversample=1, min_episode_len=3):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, help="replay_buffer.zarr 경로")
+    parser.add_argument("--input", required=True,
+                        help="env output_dir (replay_buffer.zarr + videos/ 포함)")
     parser.add_argument("--output", required=True, help="출력 HDF5 경로")
     parser.add_argument("--oversample", type=int, default=1,
                          help="correction이 포함된 에피소드를 몇 배 복제할지")
     parser.add_argument("--min_episode_len", type=int, default=3)
+    parser.add_argument("--frequency", type=float, default=10.0,
+                        help="수집 시 제어 주기(fps). 영상 프레임 정렬용 (기본 10)")
+    parser.add_argument("--cam_idx", type=int, default=0,
+                        help="image0으로 쓸 카메라 인덱스 (videos/{ep}/{cam}.mp4)")
     args = parser.parse_args()
 
     convert(args.input, args.output, oversample=args.oversample,
-            min_episode_len=args.min_episode_len)
+            min_episode_len=args.min_episode_len,
+            frequency=args.frequency, cam_idx=args.cam_idx)

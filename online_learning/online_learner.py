@@ -208,4 +208,19 @@ class OnlineLearner:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="온라인 학습 Learner. actor와 반드시 같은 base ckpt에서 시작해야 함.")
+    parser.add_argument("--input", "-i", default=None,
+                        help="base 체크포인트(.ckpt). 미지정 시 config_online.BASE_CKPT.")
+    parser.add_argument("--base_dataset", default=None,
+                        help="forgetting 완화용 base 학습 HDF5. 미지정 시 config 값.")
+    args = parser.parse_args()
+    if args.input is not None:
+        C.BASE_CKPT = args.input
+    if args.base_dataset is not None:
+        C.BASE_DATASET_PATH = args.base_dataset
+    print(f"[Learner] BASE_CKPT={C.BASE_CKPT}")
+    print(f"[Learner] BASE_DATASET_PATH={C.BASE_DATASET_PATH} "
+          f"(mix {C.NUM_BASE_DEMOS_TO_MIX} demos)")
     OnlineLearner().run()
