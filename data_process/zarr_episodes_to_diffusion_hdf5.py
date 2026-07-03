@@ -44,13 +44,13 @@ from PIL import Image
 # ============================================================
 
 DATASET_ROOT = "/home/rush/Desktop/Datasets/20260630_195919"
-OUTPUT_HDF5  = "/home/rush/Desktop/Datasets/20260630_195919_diffusion.hdf5"
+OUTPUT_HDF5  = "/home/rush/Desktop/Datasets/20260630_195919_diffusion_des_10.hdf5"
 
 # 변환할 에피소드 인덱스 (None = 전체)
 EPISODE_INDICES = None
 # EPISODE_INDICES = [0, 1, 2, 3]  # 일부만 테스트할 때
 
-# 다운샘플 스트라이드: 30Hz 원본 → 10Hz (stride=3)
+# 다운샘플 스트라이드: 30Hz 원본 → 15Hz (stride=2)
 STRIDE = 3
 
 # 출력 이미지 해상도 (width, height)
@@ -58,6 +58,13 @@ IMG_OUT_SIZE = (320, 240)
 
 # 어떤 카메라를 image0으로 사용할지
 CAMERA_NAME = "camera_0_D405"  # "camera_1_D435"
+
+# [BUGFIX] command_pose_se3 회전 오염 보정
+# 수집 시 command SE3 회전을 ZYZ order로 만들었으나, 원시 command 각도는 실제 ZYX 였음.
+# → stored 회전을 ZYZ로 각도 추출 후 ZYX로 재구성하면 물리적으로 올바른(ee 추종, 잔차 ~3°) 회전이 됨.
+# 근거: command vs ee 자세가 stored 상태에선 ~166° 고정 오차, 보정 후 ~3°(추종오차)로 붙음.
+# obs(ee_pose_se3)는 FK 결과라 정상 → command 회전만 보정한다.
+FIX_COMMAND_ZYZ_TO_ZYX = True
 
 # command SE3의 translation 단위가 mm인지 여부
 # - True  → /1000 해서 m으로 변환
@@ -68,6 +75,18 @@ COMMAND_UNIT_MM = False   # SE3에 이미 m로 저장됨 (ROS 토픽은 mm이었
 EE_UNIT_MM      = False   # ee_pose_se3는 FK 결과로 m 단위
 
 # ============================================================
+
+def fix_command_orientation_zyz_to_zyx(se3_matrices):
+    """
+    오염된 command 회전 보정: stored 회전을 ZYZ order로 각도 추출 → ZYX order로 재구성.
+    translation 은 그대로 둔다. (obs/ee 에는 적용하지 말 것 — ee 는 이미 정상)
+    """
+    out = se3_matrices.copy()
+    rot = R.from_matrix(se3_matrices[:, :3, :3])
+    fixed = R.from_euler('ZYX', rot.as_euler('ZYZ')).as_matrix()
+    out[:, :3, :3] = fixed
+    return out
+
 
 def se3_to_pos_quat(se3_matrices, unit_mm=False):
     """
@@ -157,7 +176,8 @@ def verify_units(dataset_root, n_episodes=3):
 def convert(dataset_root, output_hdf5, episode_indices=None,
             stride=3, img_out_size=(320, 240),
             camera_name="camera_0_D405",
-            command_unit_mm=True, ee_unit_mm=False):
+            command_unit_mm=True, ee_unit_mm=False,
+            fix_command_orientation=True):
 
     episode_dirs = get_episode_dirs(dataset_root, episode_indices)
     print(f"변환할 에피소드 수: {len(episode_dirs)}")
@@ -195,6 +215,9 @@ def convert(dataset_root, output_hdf5, episode_indices=None,
             ee_pos, ee_quat = se3_to_pos_quat(ee_obs, unit_mm=ee_unit_mm)
 
             # action: command → 9D (pos + rot6d)
+            # [BUGFIX] 오염된 command 회전(ZYZ로 만들어짐 → 실제 ZYX) 보정
+            if fix_command_orientation:
+                cmd_act = fix_command_orientation_zyz_to_zyx(cmd_act)
             actions = se3_to_9d(cmd_act, unit_mm=command_unit_mm)
 
             # image: resize
@@ -228,4 +251,5 @@ if __name__ == "__main__":
         camera_name=CAMERA_NAME,
         command_unit_mm=COMMAND_UNIT_MM,
         ee_unit_mm=EE_UNIT_MM,
+        fix_command_orientation=FIX_COMMAND_ZYZ_TO_ZYX,
     )
