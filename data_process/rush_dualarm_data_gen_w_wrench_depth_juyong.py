@@ -77,14 +77,10 @@ def init_buffer():
             'hand_R': [],
             'hand_cmd_L': [],
             'hand_cmd_R': [],
-            'image_H': [], 
-            'image_T': [], 
-            'image_L': [], 
-            'image_R': [], 
-            'depth_H': [], 
-            'depth_T': [], 
-            'depth_L': [], 
-            'depth_R': [], 
+            'image_H': [],
+            'image_T': [],
+            'image_L': [],
+            'image_R': [],
             'timestamp_robot': [],
 
             ## Wrench data (250Hz)
@@ -142,17 +138,12 @@ def save_robot_data(buffer, frames, last_save_time):
     buffer['observations']['hand_cmd_L'].append(G['latest_hand_cmd_L'])
     buffer['observations']['hand_cmd_R'].append(G['latest_hand_cmd_R'])
     
-    # Images and Depths (Head, Table, Left, Right)
-    for i, (img_key, depth_key) in enumerate([('image_H', 'depth_H'), 
-                                              ('image_T', 'depth_T'), 
-                                              ('image_L', 'depth_L'), 
-                                              ('image_R', 'depth_R')]):
-        if frames and i < len(frames) and frames[i] is not None and frames[i][0] is not None:
-            buffer['observations'][img_key].append(frames[i][0].copy())
-            buffer['observations'][depth_key].append(frames[i][1].copy())
+    # Images (Head, Table, Left, Right) - depth는 저장하지 않음
+    for i, img_key in enumerate(['image_H', 'image_T', 'image_L', 'image_R']):
+        if frames and i < len(frames) and frames[i] is not None:
+            buffer['observations'][img_key].append(frames[i].copy())
         else:
             buffer['observations'][img_key].append(None)
-            buffer['observations'][depth_key].append(None)
             
     buffer['observations']['timestamp_robot'].append(last_save_time)
 
@@ -210,9 +201,8 @@ class Pipeline:
         self.pipeline = rs.pipeline()
         self.config = rs.config()
         self.config.enable_device(serial)
-        self.config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-        self.config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-        self.align = rs.align(rs.stream.color)
+        self.config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+        # depth는 저장하지 않으므로 스트림 비활성화
         try:
             profile = self.pipeline.start(self.config)
             for i in range(3):
@@ -224,15 +214,13 @@ class Pipeline:
             self.pipeline = None
 
     def get_frame(self):
-        if not self.pipeline: return None, None
+        if not self.pipeline: return None
         try:
             frames = self.pipeline.wait_for_frames(timeout_ms=50)
-            frames = self.align.process(frames)
             color_frame = frames.get_color_frame()
-            depth_frame = frames.get_depth_frame()
-            if not color_frame or not depth_frame: return None, None
-            return np.asanyarray(color_frame.get_data()), np.asanyarray(depth_frame.get_data())
-        except: return None, None
+            if not color_frame: return None
+            return np.asanyarray(color_frame.get_data())
+        except: return None
 
     def get_camera_matrix(self):
         if not self.pipeline: return None, None
@@ -353,9 +341,9 @@ def display_process_func(img_q, confirm_q, response_q, window_names, stop_event)
 
         # 화면 렌더링
         if last_frames is not None:
-            for i, (name, frame_tuple) in enumerate(zip(window_names, last_frames)):
-                if frame_tuple is None or frame_tuple[0] is None: continue
-                disp = frame_tuple[0].copy()
+            for i, (name, frame) in enumerate(zip(window_names, last_frames)):
+                if frame is None: continue
+                disp = frame.copy()
                 if confirming:
                     # 반투명 어두운 오버레이
                     overlay = disp.copy()
@@ -414,6 +402,9 @@ def main():
     for s in serials:
         try:
             p = Pipeline(s)
+            if p.pipeline is None:
+                print(f"Skipping camera {s}: stream could not be started (check USB bandwidth/port).")
+                continue
             pipelines.append(p)
             window_names.append(f'Cam_{s}')
         except Exception as e:

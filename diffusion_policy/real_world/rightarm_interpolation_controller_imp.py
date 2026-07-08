@@ -12,8 +12,17 @@ from rclpy.executors import SingleThreadedExecutor
 from spatialmath import SE3
 import spatialmath.base as smb
 from std_msgs.msg import Int32, Float64, String, Float64MultiArray
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, WrenchStamped
 from sensor_msgs.msg import JointState
+
+# dsr_msgs2 는 dualarm_ws 오버레이(source ~/dualarm_ws/install/setup.bash)에만 있다.
+# 오버레이를 안 sourcing 해도 aft-only 로깅은 되도록 lazy 하게 처리한다.
+try:
+    from dsr_msgs2.srv import GetToolForce
+    _DSR_MSGS_AVAILABLE = True
+except ModuleNotFoundError:
+    GetToolForce = None
+    _DSR_MSGS_AVAILABLE = False
 
 import roboticstoolbox as rtb
 from scipy.spatial.transform import Rotation as R
@@ -33,6 +42,19 @@ from diffusion_policy.shared_memory.shared_memory_ring_buffer import SharedMemor
 from diffusion_policy.common.pose_trajectory_interpolator import PoseTrajectoryInterpolator
 
 
+# ============================================================
+# 데이터 로깅용 키/토픽
+# - joint_R          : /dsr01/joint_states 에서 받은 6축 관절각 [rad]
+# - wrench_wrist_R   : 오른팔 손목 F/T 센서 (/aft_sensor2/wrench) [fx,fy,fz,tx,ty,tz]
+#   * 토픽 이름은 rightarm_data_gen_w_wrench_imp.py / bae insert_plug 컨트롤러와 동일
+# ============================================================
+JOINT_TIMESERIES_KEY = 'joint_R'
+WRIST_WRENCH_TIMESERIES_KEY = 'wrench_wrist_R'      # aft 손목 F/T (토픽)
+DOOSAN_FORCE_TIMESERIES_KEY = 'wrench_doosan_R'     # doosan api 외력 (서비스)
+DEFAULT_WRIST_WRENCH_TOPIC = '/aft_sensor2/wrench'
+DEFAULT_DOOSAN_FORCE_SERVICE = '/dsr01/aux_control/get_tool_force'
+
+
 def rot6d_to_rotvec(rot6d: np.ndarray) -> np.ndarray:
     a1 = rot6d[:3]
     a2 = rot6d[3:]
@@ -48,7 +70,9 @@ def rot6d_to_rotvec(rot6d: np.ndarray) -> np.ndarray:
 
 
 class RightarmImp(Node):
-    def __init__(self):
+    def __init__(self, record_wrench=False, wrench_topic=DEFAULT_WRIST_WRENCH_TOPIC,
+                 record_doosan_force=False,
+                 doosan_force_service=DEFAULT_DOOSAN_FORCE_SERVICE):
         super().__init__('rightarm_imp_node')
 
         self.joint_name = [f"joint_{i}" for i in range(1,7)]
@@ -59,6 +83,45 @@ class RightarmImp(Node):
             self.joint_callback,
             10
         )
+
+        # 오른팔 손목 F/T 센서 구독 (로깅용). record_wrench=True일 때만 활성화.
+        self.wrench_wrist_R_subscriber = None
+        if record_wrench:
+            self.wrench_wrist_R_subscriber = self.create_subscription(
+                WrenchStamped,
+                wrench_topic,
+                self.wrench_wrist_R_callback,
+                10
+            )
+            print(f"[DEBUG] Subscribed wrist F/T topic: {wrench_topic}")
+
+        # doosan api 외력(get_tool_force 서비스). 제어루프를 막지 않도록 async 로 폴링.
+        self.doosan_force_client = None
+        self._doosan_force_future = None
+        if record_doosan_force:
+            self.doosan_force_client = self.create_client(
+                GetToolForce, doosan_force_service)
+            print(f"[DEBUG] Doosan force service client: {doosan_force_service}")
+
+    def poll_doosan_force(self):
+        """get_tool_force 를 비동기로 1건씩 요청/수신. blocking 없음.
+        요청이 없으면 새로 쏘고, 이전 요청이 끝났으면 결과를 읽고 다음 요청을 쏜다."""
+        global latest_wrench_doosan_R
+        if self.doosan_force_client is None:
+            return
+        if self._doosan_force_future is None:
+            if self.doosan_force_client.service_is_ready():
+                req = GetToolForce.Request()
+                req.ref = 0   # DR_BASE
+                self._doosan_force_future = self.doosan_force_client.call_async(req)
+        elif self._doosan_force_future.done():
+            try:
+                res = self._doosan_force_future.result()
+                if res is not None and getattr(res, 'success', True):
+                    latest_wrench_doosan_R = np.array(res.tool_force, dtype=np.float64)
+            except Exception as e:
+                print(f"[WARN] doosan force read failed: {e}")
+            self._doosan_force_future = None
 
         # impedance control target pose (Float64MultiArray)
         self.pose_command_publisher = self.create_publisher(
@@ -79,6 +142,14 @@ class RightarmImp(Node):
         joint_mapping = {n: p for n, p in zip(msg.name, msg.position)}
         joint_position = [joint_mapping.get(j) for j in self.joint_name]
         latest_joint_R = joint_position[:6]
+
+    def wrench_wrist_R_callback(self, msg):
+        # WrenchStamped -> [fx, fy, fz, tx, ty, tz] (raw sensor 값)
+        global latest_wrench_wrist_R
+        latest_wrench_wrist_R = np.array([
+            msg.wrench.force.x, msg.wrench.force.y, msg.wrench.force.z,
+            msg.wrench.torque.x, msg.wrench.torque.y, msg.wrench.torque.z
+        ], dtype=np.float64)
 
     def pose_command_publish(self, pose_array):
         msg = Float64MultiArray()
@@ -125,6 +196,10 @@ class RightarmInterpolationControllerImp(mp.Process):
             verbose=False,
             receive_keys=None,
             get_max_k=128,   # 30
+            record_wrench=False,
+            wrench_topic=DEFAULT_WRIST_WRENCH_TOPIC,
+            record_doosan_force=False,
+            doosan_force_service=DEFAULT_DOOSAN_FORCE_SERVICE,
             ):
         """
         frequency: CB2=125, UR3e=500
@@ -155,6 +230,15 @@ class RightarmInterpolationControllerImp(mp.Process):
         self.joints_init_speed = joints_init_speed
         self.soft_real_time = soft_real_time
         self.verbose = verbose
+        self.record_wrench = record_wrench
+        self.wrench_topic = wrench_topic
+        # dsr_msgs2 없으면 doosan api 힘 로깅 자동 비활성화 (aft 로깅은 그대로 동작)
+        if record_doosan_force and not _DSR_MSGS_AVAILABLE:
+            print("[WARN] dsr_msgs2 미탑재 → doosan api 힘 로깅 비활성화. "
+                  "활성화하려면 'source ~/dualarm_ws/install/setup.bash' 후 재실행하세요.")
+            record_doosan_force = False
+        self.record_doosan_force = record_doosan_force
+        self.doosan_force_service = doosan_force_service
 
         # build input queue; action 담아놓을 메모리
         example = {
@@ -183,6 +267,13 @@ class RightarmInterpolationControllerImp(mp.Process):
                 example[key] = np.zeros((3,), dtype=np.float64)
             elif key == 'robot_quat_L':
                 example[key] = np.zeros((4,), dtype=np.float64)
+
+        # 로깅용 추가 state (policy obs로는 안 쓰이고 timeseries HDF5 저장에만 사용)
+        example[JOINT_TIMESERIES_KEY] = np.zeros((6,), dtype=np.float64)   # 관절각 [rad]
+        if record_wrench:
+            example[WRIST_WRENCH_TIMESERIES_KEY] = np.zeros((6,), dtype=np.float64)  # aft 손목 F/T
+        if record_doosan_force:
+            example[DOOSAN_FORCE_TIMESERIES_KEY] = np.zeros((6,), dtype=np.float64)  # doosan api 외력
 
         example['robot_receive_timestamp'] = time.time()
         ring_buffer = SharedMemoryRingBuffer.create_from_examples(
@@ -272,8 +363,16 @@ class RightarmInterpolationControllerImp(mp.Process):
 
         global latest_joint_R
         latest_joint_R = None
+        global latest_wrench_wrist_R
+        latest_wrench_wrist_R = np.zeros((6,), dtype=np.float64)   # 첫 메시지 오기 전 기본값
+        global latest_wrench_doosan_R
+        latest_wrench_doosan_R = np.zeros((6,), dtype=np.float64)  # 첫 응답 오기 전 기본값
         rclpy.init(args=None)
-        node = RightarmImp()
+        node = RightarmImp(
+            record_wrench=self.record_wrench,
+            wrench_topic=self.wrench_topic,
+            record_doosan_force=self.record_doosan_force,
+            doosan_force_service=self.doosan_force_service)
 
         try:
             # wait until first joint state is received
@@ -319,6 +418,8 @@ class RightarmInterpolationControllerImp(mp.Process):
 
             while keep_running:   # 루프 시작
                 rclpy.spin_once(node)
+                # doosan api 외력 비동기 폴링 (blocking 없음)
+                node.poll_doosan_force()
                 # start control iteration
                 # send command to robot
                 t_now = time.monotonic()
@@ -367,6 +468,15 @@ class RightarmInterpolationControllerImp(mp.Process):
                         state[key] = np.array(curr_tcp_pose_R)
                     elif key == 'robot_quat_L':
                         state[key] = np.array(curr_tcp_quat_R)
+
+                # 로깅용 관절각 / 손목 F/T (ring buffer example과 키/shape 반드시 일치)
+                state[JOINT_TIMESERIES_KEY] = np.array(curr_joint_R, dtype=np.float64)
+                if self.record_wrench:
+                    state[WRIST_WRENCH_TIMESERIES_KEY] = np.array(
+                        latest_wrench_wrist_R, dtype=np.float64)
+                if self.record_doosan_force:
+                    state[DOOSAN_FORCE_TIMESERIES_KEY] = np.array(
+                        latest_wrench_doosan_R, dtype=np.float64)
 
                 state['robot_receive_timestamp'] = time.time()
                 self.ring_buffer.put(state)
