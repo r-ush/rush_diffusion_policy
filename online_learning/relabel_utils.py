@@ -137,3 +137,66 @@ def relabel_last_episode_to_hdf5(replay_buffer, env_output_dir, out_path,
         cam_idx=cam_idx, frequency=frequency, out_res=out_res)
     L = min(len(frames), T)
     return relabel_episode_to_hdf5(frames[:L], pose[:L], quat[:L], out_path)
+
+
+# ============================================================
+# 박스삽입(오른팔, wrench) 태스크용 relabel
+#   obs 키: image0, robot_pose_R, robot_quat_R, wrench_wrist_R((6,32) 윈도우)
+#   action: achieved pose(한 스텝 뒤 robot_pose_R/quat_R)를 9D(pos3+rot6d)로.
+#   ⚠ wrench_wrist_R 는 env replay_buffer에 저장된 그대로((T,6,32) 윈도우 obs)를 넣는다.
+#      learner의 dataset 로더가 이 shape((6,32))를 obs로 바로 받는지 확인 필요.
+# ============================================================
+def _extract_lowdim_box(replay_buffer, ep_index):
+    episode_ends = replay_buffer.episode_ends[:]
+    start = 0 if ep_index == 0 else int(episode_ends[ep_index - 1])
+    end = int(episode_ends[ep_index])
+    keys = replay_buffer.keys()
+    pose = replay_buffer['robot_pose_R'][start:end]
+    quat = replay_buffer['robot_quat_R'][start:end]
+    wrench = replay_buffer['wrench_wrist_R'][start:end] if 'wrench_wrist_R' in keys else None
+    stage = replay_buffer['stage'][start:end] if 'stage' in keys \
+        else np.zeros(end - start, dtype=np.int64)
+    return pose, quat, wrench, stage
+
+
+def relabel_last_episode_to_hdf5_box(replay_buffer, env_output_dir, out_path,
+                                     cam_idx=0, frequency=10.0, out_res=None):
+    """박스삽입 태스크: 마지막 에피소드를 achieved-pose relabel HDF5로 저장.
+    obs에 wrench_wrist_R((6,32))도 포함한다."""
+    ep_index = replay_buffer.n_episodes - 1
+    pose, quat, wrench, _ = _extract_lowdim_box(replay_buffer, ep_index)
+    T = len(pose)
+    frames = load_episode_frames(
+        env_output_dir, ep_index, n_steps=T,
+        cam_idx=cam_idx, frequency=frequency, out_res=out_res)
+    L = min(len(frames), T)
+    image0 = frames[:L]
+    pose = pose[:L]
+    quat = quat[:L]
+    wrench = wrench[:L] if wrench is not None else None
+
+    Tm = min(len(pose), len(image0))
+    obs_image0 = image0[:Tm - 1]
+    obs_pose = pose[:Tm - 1]
+    obs_quat = quat[:Tm - 1]
+    obs_wrench = wrench[:Tm - 1] if wrench is not None else None
+    achieved_pose = pose[1:Tm]
+    achieved_quat = quat[1:Tm]
+    actions_9d = pose_quat_to_9d(achieved_pose, achieved_quat)
+
+    if np.issubdtype(obs_image0.dtype, np.floating):
+        images_uint8 = np.clip(obs_image0 * 255.0, 0, 255).astype(np.uint8)
+    else:
+        images_uint8 = obs_image0.astype(np.uint8)
+
+    with h5py.File(out_path, "w") as f:
+        data = f.create_group("data")
+        grp = data.create_group("demo_0")
+        obs = grp.create_group("obs")
+        obs.create_dataset("robot_pose_R", data=obs_pose.astype(np.float32))
+        obs.create_dataset("robot_quat_R", data=obs_quat.astype(np.float32))
+        obs.create_dataset("image0", data=images_uint8)
+        if obs_wrench is not None:
+            obs.create_dataset("wrench_wrist_R", data=obs_wrench.astype(np.float32))
+        grp.create_dataset("actions", data=actions_9d)
+    return out_path

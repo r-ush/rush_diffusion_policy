@@ -33,7 +33,9 @@ from diffusion_policy.common.pose_trajectory_interpolator import PoseTrajectoryI
 
 # True: impedance controller (/right_dsr_controller/task_space_command)
 # False: position controller (/right_dsr_joint_controller/joint_state_command)
-USE_IMPEDANCE_CONTROLLER = False
+USE_IMPEDANCE_CONTROLLER = True   # True: task_space_command 발행(C++ 임피던스 컨트롤러가 구독,
+#   servo와 동일 경로). False면 joint 명령을 쏘는데 현재 로봇 셋업(임피던스=task_space_command)이
+#   그걸 안 따라가서 정책이 로봇을 못 움직인다.
 
 
 FINGER_WRENCH_KEYS = {
@@ -147,6 +149,16 @@ class Dualarm(Node):
         self.joint_subscriber = self.create_subscription(
             JointState,
             '/joint_states',
+            self.joint_callback,
+            10,
+            callback_group=self.callback_group
+        )
+        # 이 머신은 팔 관절이 /dsr01/joint_states(joint_1..6)에 있고 /joint_states엔 손만
+        # 있다. 두 토픽 모두 구독해서 팔이 어느 쪽에 있든 joint_callback이 latest_joint_R을
+        # 채우게 한다 (rush_eval의 RightarmInterpolationControllerImp와 동일한 팔 소스).
+        self.dsr_joint_subscriber = self.create_subscription(
+            JointState,
+            '/dsr01/joint_states',
             self.joint_callback,
             10,
             callback_group=self.callback_group
@@ -515,6 +527,8 @@ class Command(enum.Enum):
     STOP = 0
     SERVOL = 1
     SCHEDULE_WAYPOINT = 2
+    PAUSE = 3    # task_space_command 발행 중단(servo/teleop에게 로봇 양보)
+    RESUME = 4   # 현재 팔 포즈로 재동기화 후 발행 재개
 
 
 class DualarmInterpolationController(mp.Process):
@@ -730,6 +744,14 @@ class DualarmInterpolationController(mp.Process):
         }
         self.input_queue.put(message)
 
+    def pause(self):
+        """로봇 명령(task_space_command) 발행을 멈춘다. servo/teleop이 로봇을 점유."""
+        self.input_queue.put({'cmd': Command.PAUSE.value})
+
+    def resume(self):
+        """현재 팔 포즈로 재동기화 후 명령 발행을 재개한다 (스냅백 방지)."""
+        self.input_queue.put({'cmd': Command.RESUME.value})
+
     # ========= receive APIs =============
     def get_state(self, k=None, out=None):
         if k is None:
@@ -813,11 +835,12 @@ class DualarmInterpolationController(mp.Process):
             pose_interp = PoseTrajectoryInterpolator(  
                 times=[curr_t],     # [ time ]
                 poses=[curr_pose],  # [ [x,y,z,rx,ry,rz] ]
-                action_type='rightarm'
+                action_type='leftarm'   # 6D 단일팔 보간기(pos3+rotvec3). 'rightarm'은 미지원→dualarm(12D) assert에 걸림
             )
 
             iter_idx = 0
             keep_running = True
+            paused = False   # True면 task_space_command 발행 중단(servo/teleop 양보)
 
             t_start = time.monotonic()   # 수동 제어 주기 맞추기
 
@@ -843,12 +866,13 @@ class DualarmInterpolationController(mp.Process):
                 
                 target_R = np.concatenate([target_pose_R, target_rotvec_R])
 
-                # 토픽발사
-                if USE_IMPEDANCE_CONTROLLER:
-                    node.task_space_command_publish_R(target_R)
-                else:
-                    target_joint_R = servoJ(doosan_robot, latest_joint_R, target_R)
-                    node.joint_command_publish_R(target_joint_R)
+                # 토픽발사 (paused면 로봇에 아무 명령도 보내지 않음 → servo가 점유)
+                if not paused:
+                    if USE_IMPEDANCE_CONTROLLER:
+                        node.task_space_command_publish_R(target_R)
+                    else:
+                        target_joint_R = servoJ(doosan_robot, latest_joint_R, target_R)
+                        node.joint_command_publish_R(target_joint_R)
                 # node.hand_command_publish(np.concatenate([target_hand_R]))   
 
                 # trajectory 확인용
@@ -957,9 +981,24 @@ class DualarmInterpolationController(mp.Process):
                             max_rot_speed=self.max_rot_speed,
                             curr_time=curr_time,
                             last_waypoint_time=last_waypoint_time,
-                            action_type='rightarm'
+                            action_type='leftarm'   # 6D 단일팔 보간기(pos3+rotvec3). 'rightarm'은 미지원→dualarm(12D) assert에 걸림
                         )
                         last_waypoint_time = target_time
+
+                    elif cmd == Command.PAUSE.value:
+                        paused = True
+                        print("[DEBUG] PAUSE: task_space_command 발행 중단 (servo 점유)")
+
+                    elif cmd == Command.RESUME.value:
+                        # 현재 팔 포즈(이번 iter에서 FK로 갱신됨)로 재동기화 → 스냅백 방지
+                        paused = False
+                        _now_t = time.monotonic()
+                        _curr_pose = np.concatenate([curr_tcp_pose_R, curr_tcp_rotvec_R])
+                        pose_interp = PoseTrajectoryInterpolator(
+                            times=[_now_t], poses=[_curr_pose], action_type='leftarm')
+                        last_waypoint_time = _now_t
+                        print("[DEBUG] RESUME: pose_interp를 현재 포즈로 재동기화")
+
                     else:
                         keep_running = False
                         break

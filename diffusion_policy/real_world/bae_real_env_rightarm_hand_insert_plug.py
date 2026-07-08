@@ -373,16 +373,22 @@ class DualarmRealEnv:
                 robot_timestamps
             )
 
-        # Wrench 32-frame obs
+        # Wrench obs: 최신 (C,32) 윈도우 1개를 명시적 T=1 차원과 함께 (1, C, 32)로 준다.
+        #   정책은 wrench를 (B, T_wrench, C, H)로 받고 T_wrench 만큼 force 토큰을 만든다.
+        #   이 모델은 T_wrench=1로 학습됨 (pos_emb = vision To + force 1). 한 윈도우 안에
+        #   이미 32프레임 history가 들어있어 obs step 여러 개가 필요 없다.
+        #   (예전엔 (6,32)로 T 차원 자체가 없어 (B,T,C,H) assert에 걸렸다.)
         wrench_hist_dict = {}
         for wrench_key in self.wrench_keys:
             wrench_shape = self.key_shape_map.get(wrench_key, (6, 32))
             wrench_axis = wrench_shape[0]
 
             if wrench_key in last_robot_data and len(last_robot_data[wrench_key]) > 0:
-                wrench_hist_dict[wrench_key] = last_robot_data[wrench_key][-1].astype(np.float32)
+                wrench_hist_dict[wrench_key] = np.asarray(
+                    last_robot_data[wrench_key])[-1][None].astype(np.float32)  # (1, C, 32)
             else:
-                wrench_hist_dict[wrench_key] = np.zeros((wrench_axis, 32), dtype=np.float32)
+                wrench_hist_dict[wrench_key] = np.zeros(
+                    (1, wrench_axis, 32), dtype=np.float32)
 
         # return obs
         obs_data = dict(camera_obs)
@@ -391,10 +397,13 @@ class DualarmRealEnv:
         obs_data['timestamp'] = obs_align_timestamps
         return obs_data
     
-    def exec_actions(self, 
-            actions: np.ndarray, 
-            timestamps: np.ndarray, 
-            stages: Optional[np.ndarray]=None):
+    def exec_actions(self,
+            actions: np.ndarray,
+            timestamps: np.ndarray,
+            stages: Optional[np.ndarray]=None,
+            record_only: bool=False):
+        # record_only=True: 로봇에 명령을 보내지 않고(schedule_waypoint 생략) 기록만.
+        #   servo/teleop이 로봇을 몰 때, 그 achieved 궤적을 correction으로 남기는 용도.
         assert self.is_ready
         if not isinstance(actions, np.ndarray):
             actions = np.array(actions)
@@ -412,12 +421,13 @@ class DualarmRealEnv:
         new_timestamps = timestamps[is_new]
         new_stages = stages[is_new]
 
-        # schedule waypoints; input_queue에 waypoint 쌓기
-        for i in range(len(new_actions)):
-            self.robot.schedule_waypoint(
-                pose=new_actions[i],
-                target_time=new_timestamps[i]
-            )
+        # schedule waypoints; input_queue에 waypoint 쌓기 (record_only면 생략)
+        if not record_only:
+            for i in range(len(new_actions)):
+                self.robot.schedule_waypoint(
+                    pose=new_actions[i],
+                    target_time=new_timestamps[i]
+                )
         
         # record actions; Accumulator 사용
         if self.action_accumulator is not None:
@@ -434,6 +444,15 @@ class DualarmRealEnv:
     
     def get_robot_state(self):
         return self.robot.get_state()
+
+    # ── teleop 핸드오프: 컨트롤러의 로봇 명령 발행을 멈췄다/재개 ──
+    def pause_robot(self):
+        "정책 제어 컨트롤러의 로봇 명령 발행 중단(servo/teleop에게 양보)."
+        self.robot.pause()
+
+    def resume_robot(self):
+        "현재 팔 포즈로 재동기화 후 정책 제어 재개(스냅백 방지)."
+        self.robot.resume()
 
     # recording API
     def start_episode(self, start_time=None):
