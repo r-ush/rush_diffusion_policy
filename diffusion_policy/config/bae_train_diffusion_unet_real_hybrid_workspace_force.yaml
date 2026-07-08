@@ -61,7 +61,7 @@ policy:
     vision_encoder_cfg:
       model_name: 'resnet34.a1_in1k'
       #model_name: 'vit_base_patch32_clip_224.openai'
-      pretrained: True
+      pretrained: False
       frozen: False
       global_pool: ''
       feature_aggregation: 'attention_pool_2d'
@@ -97,15 +97,15 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 16
+  batch_size: 24
   num_workers: 16
   shuffle: True
   pin_memory: True
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 1
-  num_workers: 1
+  batch_size: 24
+  num_workers: 16
   shuffle: False
   pin_memory: True
   persistent_workers: True
@@ -161,14 +161,14 @@ checkpoint:
   save_last_snapshot: False
 
 multi_run:
-  run_dir: /data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
 
 hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: /data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   sweep:
-    dir: /data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
     subdir: ${hydra.job.num}

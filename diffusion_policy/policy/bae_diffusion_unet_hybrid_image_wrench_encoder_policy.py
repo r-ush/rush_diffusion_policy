@@ -234,24 +234,29 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
 
 
         ### Force Encoder
-        if fc.model_name == 'causalconv':
-            force_encoder = CausalConvForceEncoder(
-                input_dim=self.num_wrench_component,
-                feature_dim=fc.feature_dim
-            )
-        elif fc.model_name == 'gru':
-            force_encoder = GRUForceEncoder(
-                input_dim=self.num_wrench_component,
-                feature_dim=fc.feature_dim
-            )
-        else:
-            raise ValueError(f"Unsupported force encoder: {fc.model_name}")
-        force_feature_dim = fc.feature_dim
+        force_encoder = None
+        force_feature_dim = 0
+        force_obs_steps = 0
+        if self.num_wrench > 0:
+            if fc.model_name == 'causalconv':
+                force_encoder = CausalConvForceEncoder(
+                    input_dim=self.num_wrench_component,
+                    feature_dim=fc.feature_dim
+                )
+            elif fc.model_name == 'gru':
+                force_encoder = GRUForceEncoder(
+                    input_dim=self.num_wrench_component,
+                    feature_dim=fc.feature_dim
+                )
+            else:
+                raise ValueError(f"Unsupported force encoder: {fc.model_name}")
+            force_feature_dim = fc.feature_dim
+            # Dataset returns the latest wrench history window only.
+            force_obs_steps = 1
 
         # fuse mode
         self.low_dim_encoder = None
         if obs_encoder.fuse_mode == 'modality-attention':
-            self.low_dim_encoder = nn.Linear(self.num_low_dim_component, vision_feature_dim)
             self.transformer_encoder = torch.nn.TransformerEncoderLayer(
                 d_model=vision_feature_dim,
                 nhead=8,
@@ -261,8 +266,9 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             )
             # token design:
             # - vision: one token per image per step -> len(rgb_keys) * n_obs_steps
-            # - low_dim: one token per step -> n_obs_steps
-            n_features = (len(rgb_keys) + 1) * n_obs_steps
+            # - wrench: one encoded history token
+            # low_dim stays outside modality attention, matching ACP.
+            n_features = len(rgb_keys) * n_obs_steps + force_obs_steps
             self.linear_projection = nn.Linear(vision_feature_dim*n_features, vision_feature_dim)
             
             if obs_encoder.position_encoding == 'learnable':
@@ -273,12 +279,13 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         # Diffusion Model 시작 ==================================================
         # create diffusion model
         if obs_encoder.fuse_mode == 'modality-attention':
-            # attention output tokens are projected to a single embedding vector
-            obs_feature_dim = vision_feature_dim
+            # Project image/wrench tokens, then concatenate raw low_dim history.
+            obs_feature_dim = vision_feature_dim + self.num_low_dim_component * n_obs_steps
         elif obs_encoder.fuse_mode == 'concat':
             # Keep normalized low_dim state direct, matching the original hybrid policy more closely.
             obs_feature_dim = vision_feature_dim * self.num_image * n_obs_steps \
-                                + self.num_low_dim_component * n_obs_steps
+                                + self.num_low_dim_component * n_obs_steps \
+                                + force_feature_dim * force_obs_steps
         else:
             raise ValueError(f"Unsupported fuse mode: {obs_encoder.fuse_mode}")
 
@@ -317,6 +324,7 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         self.horizon = horizon
         self.vision_feature_dim = vision_feature_dim
         self.force_feature_dim = force_feature_dim
+        self.force_obs_steps = force_obs_steps
         self.obs_feature_dim = obs_feature_dim
         self.action_dim = action_dim
         self.n_action_steps = n_action_steps
@@ -337,7 +345,10 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
 
         print("Diffusion params: %e" % sum(p.numel() for p in self.model.parameters()))
         print("Vision Encoder params: %e" % sum(p.numel() for p in self.vision_encoder.parameters()))
-        print("Force Encoder params: %e" % sum(p.numel() for p in self.force_encoder.parameters()))
+        if self.force_encoder is not None:
+            print("Force Encoder params: %e" % sum(p.numel() for p in self.force_encoder.parameters()))
+        else:
+            print("Force Encoder params: 0.000000e+00")
    
 
     # ========= inference  ============
@@ -389,6 +400,25 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             img = transform(img)
             transformed_obs[key] = img.reshape(*obs.shape[:2], *img.shape[1:])
         return transformed_obs
+
+    def _encode_wrench(self, wrench_nobs, batch_size):
+        if len(self.wrench_keys) == 0:
+            return [], []
+        assert self.force_encoder is not None
+
+        wrench_total = torch.cat(
+            [wrench_nobs[key] for key in self.wrench_keys],
+            dim=-2
+        )
+        assert wrench_total.ndim == 4, f"Expected wrench shape (B, T, C, H), got {wrench_total.shape}"
+
+        wrench_obs_steps = wrench_total.shape[1]
+        force_feature = self.force_encoder(
+            wrench_total.reshape(-1, *wrench_total.shape[-2:])
+        )
+        force_feature = force_feature.reshape(batch_size, wrench_obs_steps, -1)
+
+        return [force_feature.reshape(batch_size, -1)], [force_feature]
 
 
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -447,27 +477,18 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             modality_features.append(vision_feature.reshape(B, To, -1)) # (B, To, vision_feature_dim)
 
         # low-dim encoding
-        low_dim_features = []
-        for t in range(To):
-            low_dim_t = torch.cat([nobs[key][:,t,:] for key in self.low_dim_keys], dim=-1)
-            if self.low_dim_encoder is None:
-                low_dim_feature_t = low_dim_t
-            else:
-                low_dim_feature_t = self.low_dim_encoder(low_dim_t)
-            low_dim_features.append(low_dim_feature_t.reshape(B, -1))
-        low_dim_features = torch.stack(low_dim_features, dim=1)  # (B, To, low_dim_feature_dim)
-        modality_features.append(low_dim_features)
+        if len(self.low_dim_keys) > 0:
+            low_dim_features = []
+            for t in range(To):
+                low_dim_t = torch.cat([nobs[key][:,t,:] for key in self.low_dim_keys], dim=-1)
+                low_dim_features.append(low_dim_t.reshape(B, -1))
+            low_dim_features = torch.stack(low_dim_features, dim=1)  # (B, To, low_dim_dim)
+        else:
+            low_dim_features = torch.empty(B, To, 0, device=device, dtype=dtype)
 
         # Force encoding
-        # force_features = []
-        # combined_wrench_data = []
-        # for key in self.wrench_keys:
-        #     combined_wrench_data.append(wrench_nobs[key]) # (B, To=1, wrench_axis, wrench_hist)
-
-        # wrench_total = torch.cat(combined_wrench_data, dim=-2) # (B, To=1, num_wrench_component, wrench_hist)
-        # force_feature = self.force_encoder(wrench_total.reshape(-1, *wrench_total.shape[-2:])) # (B, 1, feature_dim)
-        # force_features.append(force_feature.reshape(B, -1)) # (B, feature_dim)
-        # modality_features.append(force_feature) # (B, 1, feature_dim)
+        force_features, force_modality_features = self._encode_wrench(wrench_nobs, B)
+        modality_features.extend(force_modality_features)
 
         
         # fuse mode
@@ -481,10 +502,9 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 in_embeds = in_embeds + pos_emb.unsqueeze(0)
             out_embeds = self.transformer_encoder(in_embeds)
             projected_embeds = self.linear_projection(out_embeds.flatten(start_dim=1))
-            nobs_features = projected_embeds
+            nobs_features = torch.cat([projected_embeds, low_dim_features.reshape(B, -1)], dim=-1)
         elif self.fuse_mode == 'concat':
-            # nobs_features = torch.cat(vision_features + [low_dim_features.reshape(B, -1)] + force_features, dim=-1)
-            nobs_features = torch.cat(vision_features + [low_dim_features.reshape(B, -1)], dim=-1)
+            nobs_features = torch.cat(vision_features + [low_dim_features.reshape(B, -1)] + force_features, dim=-1)
         else:
             raise ValueError(f"Unsupported fuse mode: {self.fuse_mode}")
         
@@ -578,28 +598,19 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             modality_features.append(vision_feature.reshape(B, To, -1)) # (B, To, vision_feature_dim)
 
         # low-dim encoding
-        low_dim_features = []
-        for t in range(To):
-            low_dim_t = torch.cat([nobs[key][:,t,:] for key in self.low_dim_keys], dim=-1)
-            if self.low_dim_encoder is None:
-                low_dim_feature_t = low_dim_t
-            else:
-                low_dim_feature_t = self.low_dim_encoder(low_dim_t)
-            low_dim_features.append(low_dim_feature_t.reshape(B, -1))
-        low_dim_features = torch.stack(low_dim_features, dim=1)  # (B, To, low_dim_feature_dim)
-        modality_features.append(low_dim_features)
+        if len(self.low_dim_keys) > 0:
+            low_dim_features = []
+            for t in range(To):
+                low_dim_t = torch.cat([nobs[key][:,t,:] for key in self.low_dim_keys], dim=-1)
+                low_dim_features.append(low_dim_t.reshape(B, -1))
+            low_dim_features = torch.stack(low_dim_features, dim=1)  # (B, To, low_dim_dim)
+        else:
+            low_dim_features = torch.empty(B, To, 0, device=nactions.device, dtype=nactions.dtype)
         
 
         # Force encoding
-        # force_features = []
-        # combined_wrench_data = []
-        # for key in self.wrench_keys:
-        #     combined_wrench_data.append(wrench_nobs[key]) # (B, To=1, wrench_axis, wrench_hist)
-
-        # wrench_total = torch.cat(combined_wrench_data, dim=-2) # (B, To=1, num_wrench_component, wrench_hist)
-        # force_feature = self.force_encoder(wrench_total.reshape(-1, *wrench_total.shape[-2:])) # (B, 1, feature_dim)
-        # force_features.append(force_feature.reshape(B, -1)) # (B, feature_dim)
-        # modality_features.append(force_feature) # (B, 1, feature_dim)
+        force_features, force_modality_features = self._encode_wrench(wrench_nobs, B)
+        modality_features.extend(force_modality_features)
 
         
         # fuse mode
@@ -613,11 +624,10 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
                 in_embeds = in_embeds + pos_emb.unsqueeze(0)
             out_embeds = self.transformer_encoder(in_embeds) # (B, feature_num, feature_dim)
             projected_embeds = self.linear_projection(out_embeds.flatten(start_dim=1)) # (B, obs_feature_dim)
-            nobs_features = projected_embeds
+            nobs_features = torch.cat([projected_embeds, low_dim_features.reshape(B, -1)], dim=-1)
 
         elif self.fuse_mode == 'concat':
-            # nobs_features = torch.cat(vision_features + [low_dim_features.reshape(B, -1)] + force_features, dim=-1)
-            nobs_features = torch.cat(vision_features + [low_dim_features.reshape(B, -1)], dim=-1)
+            nobs_features = torch.cat(vision_features + [low_dim_features.reshape(B, -1)] + force_features, dim=-1)
         else:
             raise ValueError(f"Unsupported fuse mode: {self.fuse_mode}")
         

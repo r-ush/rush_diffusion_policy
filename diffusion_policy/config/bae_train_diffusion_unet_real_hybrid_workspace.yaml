@@ -20,7 +20,7 @@ obs_as_global_cond: True
 
 policy:
   _target_: diffusion_policy.policy.diffusion_unet_hybrid_image_policy.DiffusionUnetHybridImagePolicy
-  # ./diffusion_policy/policy/diffusion_unet_hybrid_image_policy.py
+
   shape_meta: ${shape_meta}
   
   noise_scheduler:
@@ -40,10 +40,10 @@ policy:
   horizon: ${horizon}
   n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
   n_obs_steps: ${n_obs_steps}
-  num_inference_steps: 8
+  num_inference_steps: 16
   obs_as_global_cond: ${obs_as_global_cond}
   # crop_shape: [76, 76] # 84x84 90%
-  crop_shape: [216, 288] # ch, cw 320x240 90%
+  crop_shape: [214, 214] # ch, cw 320x240 90%
   # crop_shape: null
   diffusion_step_embed_dim: 128
   down_dims: [256,512,1024]
@@ -67,22 +67,22 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 16
+  batch_size: 24
   num_workers: 16
   shuffle: True
   pin_memory: True
   persistent_workers: True
 
 val_dataloader:
-  batch_size: 1
-  num_workers: 1
+  batch_size: 24
+  num_workers: 16
   shuffle: False
   pin_memory: True
   persistent_workers: True
 
 optimizer:
   _target_: torch.optim.AdamW
-  lr: 1.0e-4
+  lr: 3.0e-4
   betas: [0.95, 0.999]
   eps: 1.0e-8
   weight_decay: 1.0e-6
@@ -122,27 +122,23 @@ logging:
   group: null
 
 checkpoint:
-  resume_path: null
-  drive_sync_enabled: True
-  drive_sync_every: 10
-  drive_sync_dir: /content/drive/MyDrive/diffusion_checkpoints/
   topk:
     monitor_key: train_loss
     mode: min
-    k: 10
+    k: 20
     format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
   save_last_ckpt: True
   save_last_snapshot: False
 
 multi_run:
-  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  run_dir: /data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
 
 hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: /data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
   sweep:
-    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    dir: /data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
     subdir: ${hydra.job.num}

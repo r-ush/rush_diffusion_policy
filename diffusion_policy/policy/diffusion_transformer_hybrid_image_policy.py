@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+import torchvision.transforms as T
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
@@ -17,11 +18,6 @@ import robomimic.utils.obs_utils as ObsUtils
 import robomimic.models.base_nets as rmbn
 import diffusion_policy.model.vision.crop_randomizer as dmvc
 from diffusion_policy.common.pytorch_util import dict_apply, replace_submodules
-
-
-_RMBN_CROP_RANDOMIZER_TYPES = ()
-if hasattr(rmbn, 'CropRandomizer'):
-    _RMBN_CROP_RANDOMIZER_TYPES = (getattr(rmbn, 'CropRandomizer'),)
 
 
 class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
@@ -48,6 +44,7 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             time_as_cond=True,
             obs_as_cond=True,
             pred_action_steps_only=False,   # 실행할 action만 예측
+            pose_repr: dict={},
             # parameters passed to step
             **kwargs):
         super().__init__()
@@ -63,9 +60,14 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             'depth': [],
             'scan': []
         }
+        self.obs_pose_repr = pose_repr.get('obs_pose_repr', 'abs')
+        self.action_pose_repr = pose_repr.get('action_pose_repr', 'abs')
+
         obs_key_shapes = dict()
         for key, attr in obs_shape_meta.items():
             shape = attr['shape']
+            if self.obs_pose_repr == 'relative' and 'quat' in key:
+                shape = (6,)
             obs_key_shapes[key] = list(shape)
 
             type = attr.get('type', 'low_dim')
@@ -125,10 +127,10 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             # obs_encoder.obs_nets['agentview_image'].nets[0].nets
         
         # obs_encoder.obs_randomizers['agentview_image']
-        if eval_fixed_crop and _RMBN_CROP_RANDOMIZER_TYPES:
+        if eval_fixed_crop:
             replace_submodules(
                 root_module=obs_encoder,
-            predicate=lambda x: isinstance(x, _RMBN_CROP_RANDOMIZER_TYPES),
+                predicate=lambda x: isinstance(x, rmbn.CropRandomizer),
                 func=lambda x: dmvc.CropRandomizer(
                     input_shape=x.input_shape,
                     crop_height=x.crop_height,
@@ -145,11 +147,11 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         cond_dim = obs_feature_dim if obs_as_cond else 0 # True
 
         model = TransformerForDiffusion(
-            input_dim=input_dim,    # noise가 섞인 action trajectory
-            output_dim=output_dim,  # 예측한 noise
+            input_dim=input_dim,
+            output_dim=output_dim,
             horizon=horizon,
             n_obs_steps=n_obs_steps,
-            cond_dim=cond_dim,      # obs feature가 condition으로 들어옴
+            cond_dim=cond_dim,
             n_layer=n_layer,
             n_head=n_head,
             n_emb=n_emb,
@@ -321,7 +323,15 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
     def compute_loss(self, batch):
         # normalize input
         assert 'valid_mask' not in batch
-        nobs = self.normalizer.normalize(batch['obs'])      # Step 1️⃣ — 정규화 (Normalization)
+
+        # 이미지 augmentation!!!!!!!!!!!!!!!
+        transform = T.Compose([T.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5, hue=0.08),
+                               T.RandomGrayscale(p=0.005)])
+        num_image = len([key for key in batch['obs'].keys() if 'image' in key])
+        for i in range(num_image):
+            batch['obs'][f'image{i}'] = transform(batch['obs'][f'image{i}'])
+
+        nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
@@ -330,9 +340,9 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         # handle different ways of passing observation
         cond = None
         trajectory = nactions
-        if self.obs_as_cond:  # True
+        if self.obs_as_cond:
             # reshape B, T, ... to B*T
-            this_nobs = dict_apply(nobs,        # Step 2️⃣ — Obs 인코딩 (Obs Encoding)
+            this_nobs = dict_apply(nobs, 
                 lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, T, Do
@@ -356,7 +366,7 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
             condition_mask = self.mask_generator(trajectory.shape)
 
         # Sample noise that we'll add to the images
-        noise = torch.randn(trajectory.shape, device=trajectory.device)  # Step 3️⃣ — Forward Diffusion (노이즈 주입) 
+        noise = torch.randn(trajectory.shape, device=trajectory.device)
         bsz = trajectory.shape[0]
         # Sample a random timestep for each image
         timesteps = torch.randint(
@@ -372,10 +382,10 @@ class DiffusionTransformerHybridImagePolicy(BaseImagePolicy):
         loss_mask = ~condition_mask
 
         # apply conditioning
-        noisy_trajectory[condition_mask] = trajectory[condition_mask]       # Step 4️⃣ — Target 계산 (Condition Masking)
+        noisy_trajectory[condition_mask] = trajectory[condition_mask]
         
         # Predict the noise residual
-        pred = self.model(noisy_trajectory, timesteps, cond) # Step 5️⃣ — 예측 (Prediction)
+        pred = self.model(noisy_trajectory, timesteps, cond)
 
         pred_type = self.noise_scheduler.config.prediction_type 
         if pred_type == 'epsilon':
