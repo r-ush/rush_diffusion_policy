@@ -4,8 +4,11 @@ import numpy as np
 import time
 import shutil
 import math
+import h5py
 from multiprocessing.managers import SharedMemoryManager
-from diffusion_policy.real_world.rightarm_hand_insert_plug_interpolation_controller import DualarmInterpolationController # 듀얼암 + 핸드
+from diffusion_policy.real_world.rightarm_hand_insert_plug_interpolation_controller import (
+    DualarmInterpolationController,
+    WRIST_WRENCH_TIMESERIES_KEY) # 듀얼암 + 핸드
 from diffusion_policy.real_world.multi_realsense import MultiRealsense, SingleRealsense
 from diffusion_policy.real_world.video_recorder import VideoRecorder
 from diffusion_policy.common.timestamp_accumulator import (
@@ -78,19 +81,29 @@ class DualarmRealEnv:
             thread_per_video=2,
             video_crf=21,
             # vis params
-            enable_multi_cam_vis=False,   
+            enable_multi_cam_vis=False,
             # multi_cam_vis_resolution=(1280,720),
             multi_cam_vis_resolution=(224,224),
+            # wrench / hand
+            record_wrist_wrench=False,
+            use_hand=False,
+            timeseries_hdf5_dir=None,
             # shared memory
             shm_manager=None
             ):
-        
+
         # output 동영상 저장
         assert frequency <= video_capture_fps
         output_dir = pathlib.Path(output_dir)
         assert output_dir.parent.is_dir()
         video_dir = output_dir.joinpath('videos')
         video_dir.mkdir(parents=True, exist_ok=True)
+        # per-episode timeseries HDF5(진단용: action target, actual pose, 손목 wrench) 저장 폴더
+        if timeseries_hdf5_dir is None:
+            timeseries_hdf5_dir = output_dir.joinpath('timeseries_hdf5')
+        else:
+            timeseries_hdf5_dir = pathlib.Path(timeseries_hdf5_dir)
+        timeseries_hdf5_dir.mkdir(parents=True, exist_ok=True)
         zarr_path = str(output_dir.joinpath('replay_buffer.zarr').absolute())
         replay_buffer = ReplayBuffer.create_from_path(
             zarr_path=zarr_path, mode='a')
@@ -192,11 +205,16 @@ class DualarmRealEnv:
             j_init = None
 
 
+        # 손목 wrench timeseries를 get_obs 사이에 놓치지 않도록 ring buffer를 크게 잡는다.
+        robot_get_max_k = max_obs_buffer_size
+        if record_wrist_wrench:
+            robot_get_max_k = max(robot_get_max_k, 512)
+
         # 로봇
         robot = DualarmInterpolationController(
             shm_manager=shm_manager,
             robot_ip=robot_ip,
-            frequency=125, 
+            frequency=125,
             lookahead_time=0.1,
             gain=300,
             max_pos_speed=max_pos_speed*cube_diag,
@@ -210,8 +228,10 @@ class DualarmRealEnv:
             soft_real_time=False,
             verbose=False,
             receive_keys=None,
-            get_max_k=max_obs_buffer_size,
-            shape_meta=shape_meta
+            get_max_k=robot_get_max_k,
+            shape_meta=shape_meta,
+            record_wrist_wrench=record_wrist_wrench,
+            use_hand=use_hand,
             )
         self.realsense = realsense
         self.robot = robot
@@ -226,13 +246,21 @@ class DualarmRealEnv:
         # recording
         self.output_dir = output_dir
         self.video_dir = video_dir
+        self.timeseries_hdf5_dir = timeseries_hdf5_dir
         self.replay_buffer = replay_buffer
+        self.record_wrist_wrench = bool(record_wrist_wrench)
+        self.use_hand = bool(use_hand)
         # temp memory buffers
         self.last_realsense_data = None
         # recording buffers
         self.obs_accumulator = None
         self.action_accumulator = None
         self.stage_accumulator = None
+        # per-episode timeseries 기록 버퍼 (start_episode에서 초기화)
+        self.wrist_wrench_records = None
+        self.action_target_records = None
+        self.actual_state_records = None
+        self.last_timeseries_timestamp = -np.inf
 
         self.start_time = None
 
@@ -327,6 +355,9 @@ class DualarmRealEnv:
         # 125 hz, robot_receive_timestamp
         last_robot_data = self.robot.get_all_state()   # 남은거 긁어옴
         # both have more than n_obs_steps data
+
+        # timeseries HDF5 기록용 데이터 누적 (start_episode~end_episode 사이에만 동작)
+        self._accumulate_timeseries_data(last_robot_data)
 
         # align camera obs timestamps
         dt = 1 / self.frequency
@@ -440,8 +471,129 @@ class DualarmRealEnv:
                 new_stages,
                 new_timestamps
             )
-    
-    
+
+        # timeseries HDF5용 action target 기록 (record_only여도 기록은 남긴다)
+        if self.action_target_records is not None and len(new_actions) > 0:
+            self.action_target_records['timestamp'].append(new_timestamps.astype(np.float64))
+            self.action_target_records['elapsed_s'].append(
+                (new_timestamps - self.start_time).astype(np.float64))
+            self.action_target_records['receive_timestamp'].append(
+                np.full((len(new_actions),), receive_time, dtype=np.float64))
+            self.action_target_records['action'].append(new_actions.astype(np.float64))
+            self.action_target_records['stage'].append(new_stages.astype(np.int64))
+
+
+    def _accumulate_timeseries_data(self, robot_data):
+        if self.actual_state_records is None:
+            return
+
+        timestamps = np.asarray(robot_data['robot_receive_timestamp'], dtype=np.float64)
+        if len(timestamps) == 0:
+            return
+
+        mask = timestamps >= self.start_time
+        mask &= timestamps > self.last_timeseries_timestamp
+        if not np.any(mask):
+            return
+
+        selected_timestamps = timestamps[mask]
+        self.actual_state_records['timestamp'].append(selected_timestamps)
+        self.actual_state_records['elapsed_s'].append(selected_timestamps - self.start_time)
+
+        if 'robot_pose_R' in robot_data:
+            self.actual_state_records['robot_pose_R'].append(
+                np.asarray(robot_data['robot_pose_R'], dtype=np.float64)[mask])
+        if 'robot_quat_R' in robot_data:
+            self.actual_state_records['robot_quat_R'].append(
+                np.asarray(robot_data['robot_quat_R'], dtype=np.float64)[mask])
+
+        if (
+                self.record_wrist_wrench
+                and self.wrist_wrench_records is not None
+                and WRIST_WRENCH_TIMESERIES_KEY in robot_data):
+            wrench = np.asarray(robot_data[WRIST_WRENCH_TIMESERIES_KEY], dtype=np.float64)
+            selected_wrench = wrench[mask]
+            self.wrist_wrench_records['timestamp'].append(selected_timestamps)
+            self.wrist_wrench_records['elapsed_s'].append(selected_timestamps - self.start_time)
+            self.wrist_wrench_records['wrench'].append(selected_wrench)
+
+        self.last_timeseries_timestamp = selected_timestamps[-1]
+
+    @staticmethod
+    def _concat_record(record, key, shape=None, dtype=np.float64):
+        values = record.get(key, None)
+        if values is None or len(values) == 0:
+            if shape is None:
+                shape = (0,)
+            return np.empty(shape, dtype=dtype)
+        return np.concatenate(values, axis=0).astype(dtype, copy=False)
+
+    def _save_timeseries_hdf5(self, episode_id, filename_suffix=""):
+        if self.actual_state_records is None or self.action_target_records is None:
+            return
+
+        hdf5_path = self.timeseries_hdf5_dir.joinpath(
+            f'episode_{episode_id:06d}{filename_suffix}.hdf5')
+        with h5py.File(hdf5_path, 'w') as f:
+            f.attrs['episode_id'] = episode_id
+            f.attrs['start_time'] = self.start_time
+            f.attrs['schema'] = (
+                'action_virtual_target: policy target action in controller input format; '
+                'actual: measured TCP position/quaternion; '
+                'wrist_ft: calibrated right wrist force/torque [fx, fy, fz, tx, ty, tz].')
+
+            action_group = f.create_group('action_virtual_target')
+            action_group.create_dataset(
+                'timestamp',
+                data=self._concat_record(self.action_target_records, 'timestamp'))
+            action_group.create_dataset(
+                'elapsed_s',
+                data=self._concat_record(self.action_target_records, 'elapsed_s'))
+            action_group.create_dataset(
+                'receive_timestamp',
+                data=self._concat_record(self.action_target_records, 'receive_timestamp'))
+            action_group.create_dataset(
+                'action',
+                data=self._concat_record(self.action_target_records, 'action', shape=(0, 0)),
+                compression='gzip')
+            action_group.create_dataset(
+                'stage',
+                data=self._concat_record(self.action_target_records, 'stage', dtype=np.int64))
+
+            actual_group = f.create_group('actual')
+            actual_group.create_dataset(
+                'timestamp',
+                data=self._concat_record(self.actual_state_records, 'timestamp'))
+            actual_group.create_dataset(
+                'elapsed_s',
+                data=self._concat_record(self.actual_state_records, 'elapsed_s'))
+            actual_group.create_dataset(
+                'robot_pose_R',
+                data=self._concat_record(self.actual_state_records, 'robot_pose_R', shape=(0, 3)),
+                compression='gzip')
+            actual_group.create_dataset(
+                'robot_quat_R',
+                data=self._concat_record(self.actual_state_records, 'robot_quat_R', shape=(0, 4)),
+                compression='gzip')
+
+            wrist_group = f.create_group('wrist_ft')
+            wrist_group.attrs['columns'] = np.array(['fx', 'fy', 'fz', 'tx', 'ty', 'tz'], dtype='S')
+            wrist_group.create_dataset(
+                'timestamp',
+                data=self._concat_record(self.wrist_wrench_records, 'timestamp')
+                if self.wrist_wrench_records is not None else np.empty((0,), dtype=np.float64))
+            wrist_group.create_dataset(
+                'elapsed_s',
+                data=self._concat_record(self.wrist_wrench_records, 'elapsed_s')
+                if self.wrist_wrench_records is not None else np.empty((0,), dtype=np.float64))
+            wrist_group.create_dataset(
+                'wrench_wrist_R',
+                data=self._concat_record(self.wrist_wrench_records, 'wrench', shape=(0, 6))
+                if self.wrist_wrench_records is not None else np.empty((0, 6), dtype=np.float64),
+                compression='gzip')
+        print(f"Timeseries HDF5 saved: {hdf5_path}")
+
+
     def get_robot_state(self):
         return self.robot.get_state()
 
@@ -490,6 +642,30 @@ class DualarmRealEnv:
             start_time=start_time,
             dt=1/self.frequency
         )
+
+        # per-episode timeseries 기록 버퍼 초기화
+        if self.record_wrist_wrench:
+            self.wrist_wrench_records = {
+                'timestamp': [],
+                'elapsed_s': [],
+                'wrench': []
+            }
+        else:
+            self.wrist_wrench_records = None
+        self.action_target_records = {
+            'timestamp': [],
+            'elapsed_s': [],
+            'receive_timestamp': [],
+            'action': [],
+            'stage': []
+        }
+        self.actual_state_records = {
+            'timestamp': [],
+            'elapsed_s': [],
+            'robot_pose_R': [],
+            'robot_quat_R': []
+        }
+        self.last_timeseries_timestamp = start_time - 1e-9
         print(f'Episode {episode_id} started!')
     
     def end_episode(self):
@@ -499,6 +675,12 @@ class DualarmRealEnv:
         
         # stop video recorder
         self.realsense.stop_recording()
+
+        # 마지막 프레임까지 timeseries 누적
+        try:
+            self._accumulate_timeseries_data(self.robot.get_all_state())
+        except Exception as e:
+            print(f"[WARNING] Failed to collect final timeseries data: {e}")
 
         if self.obs_accumulator is not None:
             # recording
@@ -515,6 +697,8 @@ class DualarmRealEnv:
             action_timestamps = self.action_accumulator.timestamps
             stages = self.stage_accumulator.actions
             n_steps = min(len(obs_timestamps), len(action_timestamps))
+            episode_id = self.replay_buffer.n_episodes
+            filename_suffix = "_partial"
             if n_steps > 0:
                 episode = dict()
                 episode['timestamp'] = obs_timestamps[:n_steps]
@@ -524,11 +708,23 @@ class DualarmRealEnv:
                     episode[key] = value[:n_steps]
                 self.replay_buffer.add_episode(episode, compressors='disk')
                 episode_id = self.replay_buffer.n_episodes - 1
+                filename_suffix = ""
                 print(f'Episode {episode_id} saved!')
-            
+
+            # per-episode timeseries HDF5 저장 (에피소드가 비면 _partial 접미사)
+            try:
+                self._save_timeseries_hdf5(
+                    episode_id=episode_id,
+                    filename_suffix=filename_suffix)
+            except Exception as e:
+                print(f"[WARNING] Failed to save timeseries HDF5: {e}")
+
             self.obs_accumulator = None
             self.action_accumulator = None
             self.stage_accumulator = None
+            self.wrist_wrench_records = None
+            self.action_target_records = None
+            self.actual_state_records = None
 
     def drop_episode(self):
         self.end_episode()
@@ -537,4 +733,13 @@ class DualarmRealEnv:
         this_video_dir = self.video_dir.joinpath(str(episode_id))
         if this_video_dir.exists():
             shutil.rmtree(str(this_video_dir))
+        # end_episode가 저장한 timeseries HDF5(방금 폐기한 에피소드)도 함께 제거
+        for suffix in ("", "_partial"):
+            ts_path = self.timeseries_hdf5_dir.joinpath(
+                f'episode_{episode_id:06d}{suffix}.hdf5')
+            if ts_path.exists():
+                try:
+                    ts_path.unlink()
+                except OSError:
+                    pass
         print(f'Episode {episode_id} dropped!')

@@ -43,6 +43,126 @@ def get_real_obs_dict(
     return obs_dict_np
 
 
+def add_wrench_obs_noise(
+        obs_dict_np: Dict[str, np.ndarray],
+        shape_meta: dict,
+        rng,
+        force_mean: float = 0.0,
+        force_uniform_min=None,
+        force_uniform_max=None,
+        force_std: float = 0.0,
+        torque_mean: float = 0.0,
+        torque_uniform_min=None,
+        torque_uniform_max=None,
+        torque_std: float = 0.0,
+        ) -> Dict[str, np.ndarray]:
+    """Add offset plus Gaussian noise to policy wrench observations only.
+
+    Force noise is applied to force channels. For 6-axis wrist wrench this is
+    channels 0:3; for 1-axis finger force keys this is channel 0. Torque noise
+    is applied only to 6-axis wrench channels 3:6.
+    """
+    force_mean = float(force_mean)
+    force_std = float(force_std)
+    torque_mean = float(torque_mean)
+    torque_std = float(torque_std)
+    has_force_uniform = force_uniform_min is not None or force_uniform_max is not None
+    has_torque_uniform = torque_uniform_min is not None or torque_uniform_max is not None
+    if has_force_uniform:
+        force_uniform_min = 0.0 if force_uniform_min is None else float(force_uniform_min)
+        force_uniform_max = force_uniform_min if force_uniform_max is None else float(force_uniform_max)
+        if force_uniform_min > force_uniform_max:
+            raise ValueError(
+                f"force_uniform_min must be <= force_uniform_max, got "
+                f"{force_uniform_min} > {force_uniform_max}"
+            )
+    if has_torque_uniform:
+        torque_uniform_min = 0.0 if torque_uniform_min is None else float(torque_uniform_min)
+        torque_uniform_max = torque_uniform_min if torque_uniform_max is None else float(torque_uniform_max)
+        if torque_uniform_min > torque_uniform_max:
+            raise ValueError(
+                f"torque_uniform_min must be <= torque_uniform_max, got "
+                f"{torque_uniform_min} > {torque_uniform_max}"
+            )
+    if (
+            force_mean == 0.0
+            and not has_force_uniform
+            and force_std <= 0.0
+            and torque_mean == 0.0
+            and not has_torque_uniform
+            and torque_std <= 0.0):
+        return obs_dict_np
+    if rng is None:
+        rng = np.random.default_rng()
+
+    obs_shape_meta = shape_meta['obs']
+    for key, attr in obs_shape_meta.items():
+        obs_type = attr.get('type', 'low_dim')
+        is_wrench_obs = obs_type == 'wrench' or (
+            obs_type == 'low_dim' and key.startswith('wrench_')
+        )
+        if not is_wrench_obs or key not in obs_dict_np:
+            continue
+
+        data = np.asarray(obs_dict_np[key])
+        if data.size == 0:
+            continue
+
+        shape = attr.get('shape', None)
+        if shape is None:
+            shape = data.shape
+        channel_axis = max(0, data.ndim - len(shape))
+        if channel_axis >= data.ndim:
+            channel_axis = 0
+        n_channels = data.shape[channel_axis]
+
+        noisy = data.astype(np.float32, copy=True)
+
+        if force_mean != 0.0 or has_force_uniform or force_std > 0.0:
+            n_force_channels = min(3, n_channels)
+            if n_force_channels > 0:
+                slicer = [slice(None)] * noisy.ndim
+                slicer[channel_axis] = slice(0, n_force_channels)
+                target = tuple(slicer)
+                if force_mean != 0.0:
+                    noisy[target] += force_mean
+                if has_force_uniform:
+                    noisy[target] += rng.uniform(
+                        low=force_uniform_min,
+                        high=force_uniform_max,
+                        size=noisy[target].shape,
+                    ).astype(noisy.dtype, copy=False)
+                if force_std > 0.0:
+                    noisy[target] += rng.normal(
+                        loc=0.0,
+                        scale=force_std,
+                        size=noisy[target].shape,
+                    ).astype(noisy.dtype, copy=False)
+
+        if (torque_mean != 0.0 or has_torque_uniform or torque_std > 0.0) and n_channels >= 6:
+            slicer = [slice(None)] * noisy.ndim
+            slicer[channel_axis] = slice(3, 6)
+            target = tuple(slicer)
+            if torque_mean != 0.0:
+                noisy[target] += torque_mean
+            if has_torque_uniform:
+                noisy[target] += rng.uniform(
+                    low=torque_uniform_min,
+                    high=torque_uniform_max,
+                    size=noisy[target].shape,
+                ).astype(noisy.dtype, copy=False)
+            if torque_std > 0.0:
+                noisy[target] += rng.normal(
+                    loc=0.0,
+                    scale=torque_std,
+                    size=noisy[target].shape,
+                ).astype(noisy.dtype, copy=False)
+
+        obs_dict_np[key] = noisy
+
+    return obs_dict_np
+
+
 # obs에서 image의 해상도 출력 (width, height)
 def get_real_obs_resolution(
         shape_meta: dict

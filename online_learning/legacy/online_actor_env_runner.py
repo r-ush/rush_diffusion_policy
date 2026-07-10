@@ -26,29 +26,14 @@ DualarmRealEnv, wrench obs)를 따르고, 온라인 훅 + 페달 servo 핸드오
    그리고 두 노드가 같은 /right_dsr_controller/task_space_command 로 발행하므로, 핸드오프
    시 actor 컨트롤러가 발행을 멈춰야(pause) 안 싸운다 — 이 스크립트가 자동으로 처리.
 
-손(hand) 제어 (--use_hand):
-  16D(팔9 + 오른손7) 체크포인트를 쓸 때 --use_hand 를 준다. 정책 제어 중엔 정책이
-  /hand_joint_controller/joint_state_command 로 손을 민다. 교정('a')으로 넘어가면 팔은
-  servo가, 손은 마누스 글러브가 담당한다 — actor는 pause로 팔·손 명령 발행을 모두 멈추므로
-  마누스와 안 싸운다. 사람이 민 achieved 손자세(hand_pose_R)가 correction(stage=1) 타깃이
-  되어 relabel 시 16D action(pose9 + hand7)으로 저장된다.
-
-  ★ 마누스는 정책 손 발행과 '같은 토픽'을 쓰므로, 마누스 노드를 --gate-teleop 로 띄운다.
-    그러면 마누스는 항상 켜둔 채로도 /teleop_control 이 교정 모드(1·2)일 때만 손을 발행하고,
-    정책 모드(4)에선 침묵한다 → 평상시 actor 손 / 교정시 마누스 손 이 자동 전환된다.
-    (--gate-teleop 없이 띄우면 200Hz로 항상 발행해 정책 손을 덮어써 버린다.)
-
 실행:
   source ~/dualarm_ws/install/setup.bash
   # 터미널1: python online_learning/servo_rightarm_imp_online.py
-  # 터미널2: python online_learning/online_learner.py -i <box_hand_ckpt>
-  # 터미널3(손 쓸 때, 항상 켜둠): (manus_ws)$ python manus_to_aidin_rush.py --gate-teleop
-  # 터미널4:
-  ONLINE_WORKDIR=data/online_runs/run_hand \
+  # 터미널2: python online_learning/online_learner.py -i <box_ckpt>
+  # 터미널3:
   python online_learning/online_actor_env_runner.py \
-      -i data/outputs/260710_insert_box_hand_wrench_abs/epoch=0900-train_loss=0.001.ckpt \
-      --steps_per_inference 12 --frequency 10 --num_inference_steps 12 --use_hand
-  # (learner/actor 모두 같은 ONLINE_WORKDIR·같은 16D ckpt, 손 실행은 새 workdir로 시작)
+      -i data/outputs/260708_insert_box_wrench_abs/epoch=0900-train_loss=0.000.ckpt \
+      --steps_per_inference 12 --frequency 10 --num_inference_steps 12
 """
 # ============================================================
 # huggingface_hub 버전 충돌 회피 (다른 import보다 먼저)
@@ -66,7 +51,7 @@ import select
 import termios
 import tty
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -83,56 +68,20 @@ from omegaconf import OmegaConf
 from diffusion_policy.real_world.bae_real_env_rightarm_hand_insert_plug import DualarmRealEnv
 from diffusion_policy.common.precise_sleep import precise_wait
 from diffusion_policy.real_world.real_inference_util import (
-    add_wrench_obs_noise,
     get_real_obs_resolution, get_real_obs_dict, get_real_relative_obs_dict,
     get_abs_action_from_relative)
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 
-from online_learning import config_online as C
-from online_learning.mailbox import FileMailbox
-from online_learning.relabel_utils import relabel_last_episode_to_hdf5_box, pose_quat_to_9d
+from online_learning.legacy import config_online as C
+from online_learning.legacy.mailbox import FileMailbox
+from online_learning.legacy.relabel_utils import relabel_last_episode_to_hdf5_box, pose_quat_to_9d
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 # 오른팔 realsense (박스삽입 eval과 동일)
 RIGHT_CAMERA_SERIALS = ['126122270712']
 WIN = "actor_control"
-
-# hand 모드: 팔 9D(pos3+rot6d) + 오른손 7D
-RIGHT_ARM_ACTION_DIM = 9
-RIGHT_HAND_POLICY_DIM = 7
-
-
-def _validate_hand_mode(shape_meta, use_hand):
-    """체크포인트 shape_meta가 --use_hand 설정과 맞는지 검증 (bae eval과 동일)."""
-    action_dim = int(shape_meta['action']['shape'][0])
-    obs_meta = shape_meta['obs']
-    hand_meta = obs_meta.get('hand_pose_R')
-    hand_shape = None if hand_meta is None else tuple(hand_meta.get('shape', ()))
-
-    expected_action_dim = RIGHT_ARM_ACTION_DIM + (
-        RIGHT_HAND_POLICY_DIM if use_hand else 0
-    )
-    if action_dim != expected_action_dim:
-        if not use_hand and action_dim == RIGHT_ARM_ACTION_DIM + RIGHT_HAND_POLICY_DIM:
-            raise click.UsageError(
-                'This checkpoint has a 7-DoF right-hand action. Re-run with --use_hand.'
-            )
-        raise click.UsageError(
-            f'Hand mode={use_hand} expects action dim {expected_action_dim}, '
-            f'but the checkpoint uses {action_dim}.'
-        )
-
-    if use_hand and hand_shape != (RIGHT_HAND_POLICY_DIM,):
-        raise click.UsageError(
-            f'--use_hand requires obs.hand_pose_R shape [{RIGHT_HAND_POLICY_DIM}], '
-            f'but the checkpoint uses {hand_shape}.'
-        )
-    if not use_hand and hand_meta is not None:
-        raise click.UsageError(
-            'This checkpoint consumes hand_pose_R. Re-run with --use_hand.'
-        )
 
 
 class TeleopControlPub:
@@ -173,22 +122,14 @@ class TeleopControlPub:
 
 
 def maybe_hotswap_weights(mailbox, policy, current_version, device):
-    """새 가중치 버전이 있으면 policy에 로드. 새 버전 번호 반환.
-    가중치 shape가 안 맞으면(예: 팔9D↔손16D 혼용된 낡은 workdir) 크래시 대신 스킵한다."""
+    """새 가중치 버전이 있으면 policy에 로드. 새 버전 번호 반환."""
     latest = mailbox.get_latest_weight_version()
     if latest is None or latest == current_version:
         return current_version
     payload = mailbox.load_weights(latest, map_location=device)
     if payload is None:
         return current_version
-    try:
-        missing, unexpected = policy.load_state_dict(payload["state_dict"], strict=False)
-    except RuntimeError as e:
-        print(f"[Actor][WARN] v{latest} 가중치 로드 실패 → hot-swap 스킵(현재 v{current_version} 유지).\n"
-              f"  보통 base ckpt와 action 차원이 다른 '낡은 mailbox' 때문입니다 (예: 팔9D↔손16D).\n"
-              f"  learner를 actor와 '같은' ckpt로 재시작하고 ONLINE_WORKDIR를 새 폴더로 비우세요.\n"
-              f"  ({type(e).__name__}: {str(e).splitlines()[0]})")
-        return current_version
+    missing, unexpected = policy.load_state_dict(payload["state_dict"], strict=False)
     policy.eval().to(device)
     print(f"[Actor] 가중치 hot-swap: v{current_version} -> v{latest} "
           f"(learner demo={payload.get('num_demos', '?')}, "
@@ -265,24 +206,8 @@ class KeyReader:
               help='에피소드 최대 길이(초). 초과 시 자동 종료(유지·전송).')
 @click.option('--frequency', '-f', default=10.0, type=float, help="제어 주기(Hz).")
 @click.option('--num_inference_steps', '-ni', default=12, type=int, help="DDIM denoising 스텝 수.")
-@click.option('--wrench_noise_force_mean', '--wrench-noise-force-mean', default=0.0, type=float, show_default=True, help='정책 wrench force 채널에 더할 상수 offset(N).')
-@click.option('--wrench_noise_force_uniform_min', '--wrench-noise-force-uniform-min', default=None, type=float, help='정책 wrench force 채널 균등노이즈 최소(N).')
-@click.option('--wrench_noise_force_uniform_max', '--wrench-noise-force-uniform-max', default=None, type=float, help='정책 wrench force 채널 균등노이즈 최대(N).')
-@click.option('--wrench_noise_force_std', '--wrench-noise-force-std', default=0.0, type=float, show_default=True, help='정책 wrench force 채널 가우시안 노이즈 std(N). <=0이면 비활성.')
-@click.option('--wrench_noise_torque_mean', '--wrench-noise-torque-mean', default=0.0, type=float, show_default=True, help='정책 wrist torque 채널에 더할 상수 offset(Nm).')
-@click.option('--wrench_noise_torque_uniform_min', '--wrench-noise-torque-uniform-min', default=None, type=float, help='정책 wrist torque 채널 균등노이즈 최소(Nm).')
-@click.option('--wrench_noise_torque_uniform_max', '--wrench-noise-torque-uniform-max', default=None, type=float, help='정책 wrist torque 채널 균등노이즈 최대(Nm).')
-@click.option('--wrench_noise_torque_std', '--wrench-noise-torque-std', default=0.0, type=float, show_default=True, help='정책 wrist torque 채널 가우시안 노이즈 std(Nm). <=0이면 비활성.')
-@click.option('--wrench_noise_seed', '--wrench-noise-seed', default=None, type=int, help='정책 wrench 관측 노이즈용 RNG seed(옵션).')
-@click.option('--record_wrist_wrench/--no_record_wrist_wrench', default=True, help="에피소드 timeseries HDF5에 오른손목 FT 기록.")
-@click.option('--use_hand/--no_use_hand', default=False, help='오른손 7-DoF 관측·행동 제어 활성화.')
 def main(input, output, robot_ip, steps_per_inference,
-         max_duration, frequency, num_inference_steps,
-         wrench_noise_force_mean, wrench_noise_force_std,
-         wrench_noise_force_uniform_min, wrench_noise_force_uniform_max,
-         wrench_noise_torque_mean, wrench_noise_torque_std,
-         wrench_noise_torque_uniform_min, wrench_noise_torque_uniform_max,
-         wrench_noise_seed, record_wrist_wrench, use_hand):
+         max_duration, frequency, num_inference_steps):
     ckpt_path = input if input is not None else C.BASE_CKPT
     output_dir = output if output is not None else C.ACTOR_OUTPUT_DIR
     os.makedirs(output_dir, exist_ok=True)
@@ -294,7 +219,6 @@ def main(input, output, robot_ip, steps_per_inference,
     print(f"[Actor] base 체크포인트 로드: {ckpt_path}")
     payload = torch.load(open(ckpt_path, "rb"), pickle_module=dill, weights_only=False)
     cfg = payload["cfg"]
-    _validate_hand_mode(cfg.task.shape_meta, use_hand)
     # 박스삽입 ckpt는 cfg.name='box_insert_virtual_action'(‘diffusion’ 미포함)이라
     # 이름만 보면 안 되고 workspace/policy _target_ 도 함께 확인한다 (bae eval과 동일).
     _wt = str(OmegaConf.select(cfg, "_target_", default="")).lower()
@@ -318,32 +242,12 @@ def main(input, output, robot_ip, steps_per_inference,
     obs_res = get_real_obs_resolution(cfg.task.shape_meta)   # (width, height)
     n_obs_steps = cfg.n_obs_steps
     action_dim = cfg.task.shape_meta.action.shape[0]
-    wrench_noise_rng = np.random.default_rng(wrench_noise_seed)
-    print(f"[Actor] right hand control: {'enabled' if use_hand else 'disabled'}, "
-          f"action_dim={action_dim}")
-    print(f"[Actor] wrench noise force mean/uniform/std: {wrench_noise_force_mean} / "
-          f"({wrench_noise_force_uniform_min},{wrench_noise_force_uniform_max}) / {wrench_noise_force_std}")
-    print(f"[Actor] wrench noise torque mean/uniform/std: {wrench_noise_torque_mean} / "
-          f"({wrench_noise_torque_uniform_min},{wrench_noise_torque_uniform_max}) / {wrench_noise_torque_std}")
 
     def make_obs_dict(obs):
         if obs_pose_repr == 'relative':
             d = get_real_relative_obs_dict(env_obs=obs, shape_meta=cfg.task.shape_meta)
         else:
             d = get_real_obs_dict(env_obs=obs, shape_meta=cfg.task.shape_meta)
-        d = add_wrench_obs_noise(
-            d,
-            cfg.task.shape_meta,
-            rng=wrench_noise_rng,
-            force_mean=wrench_noise_force_mean,
-            force_uniform_min=wrench_noise_force_uniform_min,
-            force_uniform_max=wrench_noise_force_uniform_max,
-            force_std=wrench_noise_force_std,
-            torque_mean=wrench_noise_torque_mean,
-            torque_uniform_min=wrench_noise_torque_uniform_min,
-            torque_uniform_max=wrench_noise_torque_uniform_max,
-            torque_std=wrench_noise_torque_std,
-        )
         return dict_apply(d, lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
 
     with SharedMemoryManager() as shm_manager:
@@ -365,14 +269,11 @@ def main(input, output, robot_ip, steps_per_inference,
             record_raw_video=False,
             thread_per_video=3,
             video_crf=21,
-            record_wrist_wrench=record_wrist_wrench,
-            use_hand=use_hand,
             shm_manager=shm_manager,
         ) as env:
-            # obs의 wrench_wrist_R(6,32) 기록은 shape_meta(wrench 키)로 결정되어 replay_buffer에
-            #   저장되고 relabel에 쓰인다. record_wrist_wrench=True면 그와 별개로 최신 6축 손목
-            #   FT를 per-episode timeseries HDF5로도 남긴다(진단용). use_hand=True면 정책이 손도
-            #   제어하고 hand_pose_R(7)이 obs/replay_buffer에 기록된다.
+            # 참고: 이 rush 버전 DualarmRealEnv는 record_wrist_wrench 파라미터가 없다.
+            #   obs의 wrench_wrist_R(6,32) 기록은 shape_meta(wrench 키)로 결정되며
+            #   replay_buffer에 그대로 저장되어 relabel에 쓰인다.
             print("[Actor] env READY (realsense+robot 초기화 완료).")
             cv2.setNumThreads(1)   # cv2 GUI(QT5)는 fork와 교착 → 창은 안 만들고 stdin으로 입력
             print("[Actor] 센서 워밍업...")
@@ -484,16 +385,12 @@ def main(input, output, robot_ip, steps_per_inference,
                                              stages=np.zeros(len(this_target_poses), dtype=np.int64))
                             cycle_steps = steps_per_inference
                         else:
-                            # teleop: servo가 팔을, (use_hand면) manus가 손을 몰고,
-                            # actor는 achieved pose(+hand)를 correction(stage=1)으로 기록만
-                            # 한다 (로봇에 명령 X). 사람이 민 결과가 그대로 학습 타깃.
+                            # teleop: servo가 로봇을 몰고, actor는 achieved pose를
+                            # correction(stage=1)으로 기록만 한다 (로봇에 명령 X).
                             cur_pose = np.asarray(obs['robot_pose_R'])[-1]
                             cur_quat = np.asarray(obs['robot_quat_R'])[-1]
-                            act = pose_quat_to_9d(cur_pose[None], cur_quat[None]).astype(np.float64)
-                            if use_hand:
-                                cur_hand = np.asarray(obs['hand_pose_R'])[-1].astype(np.float64)
-                                act = np.concatenate([act, cur_hand[None]], axis=1)   # (1,16)
-                            env.exec_actions(actions=act,
+                            act9 = pose_quat_to_9d(cur_pose[None], cur_quat[None]).astype(np.float64)
+                            env.exec_actions(actions=act9,
                                              timestamps=np.array([obs_timestamps[-1] + 2 * dt]),
                                              stages=np.array([1], dtype=np.int64),
                                              record_only=True)
@@ -549,8 +446,7 @@ def main(input, output, robot_ip, steps_per_inference,
                                 env_output_dir=str(env.output_dir),
                                 out_path=os.path.join(C.ONLINE_WORKDIR, "last_episode.hdf5"),
                                 frequency=frequency,
-                                out_res=obs_res,
-                                use_hand=use_hand)
+                                out_res=obs_res)
                             mailbox.send_episode(ep_hdf5)
                             print(f"[Actor] 에피소드 전송 완료: {ep_hdf5}")
                         except Exception as e:

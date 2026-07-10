@@ -2,6 +2,7 @@
 
 # 실행코드
 # python bae_eval_real_robot_rightarm_insert_plug.py --input data/outputs/260521_erase_board_unet_no_wrench/epoch\=0900-train_loss\=0.000.ckpt --output data/results
+# python bae_eval_real_robot_rightarm_insert_plug.py --input data/outputs/260710_insert_box_hand_wrench_abs/epoch\=0900-train_loss\=0.001.ckpt --output data/results/260710_insert_box_hand --use_hand
 """
 Usage:
 (robodiff)$ python eval_real_robot.py -i <ckpt_path> -o <save_dir> --robot_ip <ip_of_ur5>
@@ -41,6 +42,7 @@ import scipy.spatial.transform as st
 from diffusion_policy.real_world.bae_real_env_rightarm_hand_insert_plug import DualarmRealEnv   # 새로 만듬
 from diffusion_policy.common.precise_sleep import precise_wait
 from diffusion_policy.real_world.real_inference_util import (
+    add_wrench_obs_noise,
     get_real_obs_resolution, 
     get_real_obs_dict,
     get_real_relative_obs_dict,
@@ -63,6 +65,38 @@ RIGHT_ROBOT_TO_WORLD = np.array(
     dtype=np.float64,
 )
 DEBUG_DIR_NAME = "eval_debug"
+RIGHT_ARM_ACTION_DIM = 9
+RIGHT_HAND_POLICY_DIM = 7
+
+
+def _validate_hand_mode(shape_meta, use_hand):
+    action_dim = int(shape_meta['action']['shape'][0])
+    obs_meta = shape_meta['obs']
+    hand_meta = obs_meta.get('hand_pose_R')
+    hand_shape = None if hand_meta is None else tuple(hand_meta.get('shape', ()))
+
+    expected_action_dim = RIGHT_ARM_ACTION_DIM + (
+        RIGHT_HAND_POLICY_DIM if use_hand else 0
+    )
+    if action_dim != expected_action_dim:
+        if not use_hand and action_dim == RIGHT_ARM_ACTION_DIM + RIGHT_HAND_POLICY_DIM:
+            raise click.UsageError(
+                'This checkpoint has a 7-DoF right-hand action. Re-run with --use_hand.'
+            )
+        raise click.UsageError(
+            f'Hand mode={use_hand} expects action dim {expected_action_dim}, '
+            f'but the checkpoint uses {action_dim}.'
+        )
+
+    if use_hand and hand_shape != (RIGHT_HAND_POLICY_DIM,):
+        raise click.UsageError(
+            f'--use_hand requires obs.hand_pose_R shape [{RIGHT_HAND_POLICY_DIM}], '
+            f'but the checkpoint uses {hand_shape}.'
+        )
+    if not use_hand and hand_meta is not None:
+        raise click.UsageError(
+            'This checkpoint consumes hand_pose_R. Re-run with --use_hand.'
+        )
 
 
 def _right_robot_xyz_to_world(xyz):
@@ -970,11 +1004,29 @@ def _finish_episode_and_save_diagnostics(
 @click.option('--max_duration', '-md', default=60, help='Max duration for each epoch in seconds.')
 @click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")  
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
+@click.option('--wrench_noise_force_mean', '--wrench-noise-force-mean', default=0.0, type=float, show_default=True, help='Constant offset added to policy wrench force channels in N.')
+@click.option('--wrench_noise_force_uniform_min', '--wrench-noise-force-uniform-min', default=None, type=float, help='Minimum uniform noise added to policy wrench force channels in N.')
+@click.option('--wrench_noise_force_uniform_max', '--wrench-noise-force-uniform-max', default=None, type=float, help='Maximum uniform noise added to policy wrench force channels in N.')
+@click.option('--wrench_noise_force_std', '--wrench-noise-force-std', default=0.0, type=float, show_default=True, help='Gaussian noise std added to policy wrench force channels in N. <=0 disables force noise.')
+@click.option('--wrench_noise_torque_mean', '--wrench-noise-torque-mean', default=0.0, type=float, show_default=True, help='Constant offset added to policy wrist torque channels in Nm.')
+@click.option('--wrench_noise_torque_uniform_min', '--wrench-noise-torque-uniform-min', default=None, type=float, help='Minimum uniform noise added to policy wrist torque channels in Nm.')
+@click.option('--wrench_noise_torque_uniform_max', '--wrench-noise-torque-uniform-max', default=None, type=float, help='Maximum uniform noise added to policy wrist torque channels in Nm.')
+@click.option('--wrench_noise_torque_std', '--wrench-noise-torque-std', default=0.0, type=float, show_default=True, help='Gaussian noise std added to policy wrist torque channels in Nm. <=0 disables torque noise.')
+@click.option('--wrench_noise_seed', '--wrench-noise-seed', default=None, type=int, help='Optional RNG seed for policy wrench observation noise.')
 @click.option('--record_wrist_wrench/--no_record_wrist_wrench', default=True, help="Include right wrist FT in the episode HDF5 timeseries.")
+@click.option(
+    '--use_hand/--no_use_hand',
+    default=False,
+    help='Enable 7-DoF right-hand observation and action control.',
+)
 def main(input, output, robot_ip, match_dataset, match_episode,
     vis_camera_idx, init_joints, 
     steps_per_inference, max_duration,
-    frequency, command_latency, record_wrist_wrench):
+    frequency, command_latency, wrench_noise_force_mean, wrench_noise_force_std,
+    wrench_noise_force_uniform_min, wrench_noise_force_uniform_max,
+    wrench_noise_torque_mean, wrench_noise_torque_std,
+    wrench_noise_torque_uniform_min, wrench_noise_torque_uniform_max,
+    wrench_noise_seed, record_wrist_wrench, use_hand):
 
     def _raise_keyboard_interrupt(signum, frame):
         raise KeyboardInterrupt
@@ -985,6 +1037,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
     ckpt_path = pathlib.Path(input)
     payload = torch.load(open(ckpt_path, 'rb'), pickle_module=dill)
     cfg = payload['cfg']   # yaml에 있던 변수들 설정값
+    _validate_hand_mode(cfg.task.shape_meta, use_hand)
     
     # Head = 242422304502, Front = 336222070518, Left = 218622276386, Right = 126122270712
     # serial_numbers = ['126122270712', '151222078010'] # right, table
@@ -1036,6 +1089,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
 
     # setup experiment
     dt = 1/frequency
+    wrench_noise_rng = np.random.default_rng(wrench_noise_seed)
 
     obs_res = get_real_obs_resolution(cfg.task.shape_meta)   # obs의 image 해상도 (width, height)
     n_obs_steps = cfg.n_obs_steps   # obs 관측 step 수
@@ -1043,6 +1097,14 @@ def main(input, output, robot_ip, match_dataset, match_episode,
     print("steps_per_inference:", steps_per_inference)   # 예측한 action sequence에서 몇개의 action 실행할건지 (6)
     print("action_offset:", action_offset)   # action 지연 실행 (0)
     print("timeseries_hdf5_dir:", pathlib.Path(output).joinpath('timeseries_hdf5'))
+    print("wrench noise force mean N:", wrench_noise_force_mean)
+    print("wrench noise force uniform N:", wrench_noise_force_uniform_min, wrench_noise_force_uniform_max)
+    print("wrench noise force std N:", wrench_noise_force_std)
+    print("wrench noise torque mean Nm:", wrench_noise_torque_mean)
+    print("wrench noise torque uniform Nm:", wrench_noise_torque_uniform_min, wrench_noise_torque_uniform_max)
+    print("wrench noise torque std Nm:", wrench_noise_torque_std)
+    print("wrench noise seed:", wrench_noise_seed)
+    print("right hand control:", "enabled" if use_hand else "disabled")
 
 
     # =============== relative ==================
@@ -1067,6 +1129,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
             enable_multi_cam_vis=True,   # 별도 프로세스에서 policy 입력 해상도 image 시각화
             record_raw_video=False,   # 원본 화질 영상 저장 
             record_wrist_wrench=record_wrist_wrench,
+            use_hand=use_hand,
             # number of threads per camera view for video recording (H.264)
             thread_per_video=3,
             # video recording quality, lower is better (but slower).
@@ -1101,6 +1164,19 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                 else:
                     obs_dict_np = get_real_obs_dict(
                         env_obs=obs, shape_meta=cfg.task.shape_meta)
+                obs_dict_np = add_wrench_obs_noise(
+                    obs_dict_np,
+                    cfg.task.shape_meta,
+                    rng=wrench_noise_rng,
+                    force_mean=wrench_noise_force_mean,
+                    force_uniform_min=wrench_noise_force_uniform_min,
+                    force_uniform_max=wrench_noise_force_uniform_max,
+                    force_std=wrench_noise_force_std,
+                    torque_mean=wrench_noise_torque_mean,
+                    torque_uniform_min=wrench_noise_torque_uniform_min,
+                    torque_uniform_max=wrench_noise_torque_uniform_max,
+                    torque_std=wrench_noise_torque_std,
+                )
 
                 for key in obs_dict_np.keys():
                     print(f"{key}: {obs_dict_np[key].shape}, {obs_dict_np[key].dtype}")
@@ -1170,6 +1246,19 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                             else:
                                 obs_dict_np = get_real_obs_dict(
                                     env_obs=obs, shape_meta=cfg.task.shape_meta)
+                            obs_dict_np = add_wrench_obs_noise(
+                                obs_dict_np,
+                                cfg.task.shape_meta,
+                                rng=wrench_noise_rng,
+                                force_mean=wrench_noise_force_mean,
+                                force_uniform_min=wrench_noise_force_uniform_min,
+                                force_uniform_max=wrench_noise_force_uniform_max,
+                                force_std=wrench_noise_force_std,
+                                torque_mean=wrench_noise_torque_mean,
+                                torque_uniform_min=wrench_noise_torque_uniform_min,
+                                torque_uniform_max=wrench_noise_torque_uniform_max,
+                                torque_std=wrench_noise_torque_std,
+                            )
 
                             inference_index = (
                                 int(iter_idx // steps_per_inference)

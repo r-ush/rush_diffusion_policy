@@ -154,27 +154,17 @@ def _extract_lowdim_box(replay_buffer, ep_index):
     pose = replay_buffer['robot_pose_R'][start:end]
     quat = replay_buffer['robot_quat_R'][start:end]
     wrench = replay_buffer['wrench_wrist_R'][start:end] if 'wrench_wrist_R' in keys else None
-    hand = replay_buffer['hand_pose_R'][start:end] if 'hand_pose_R' in keys else None
     stage = replay_buffer['stage'][start:end] if 'stage' in keys \
         else np.zeros(end - start, dtype=np.int64)
-    return pose, quat, wrench, hand, stage
+    return pose, quat, wrench, stage
 
 
 def relabel_last_episode_to_hdf5_box(replay_buffer, env_output_dir, out_path,
-                                     cam_idx=0, frequency=10.0, out_res=None,
-                                     use_hand=False):
+                                     cam_idx=0, frequency=10.0, out_res=None):
     """박스삽입 태스크: 마지막 에피소드를 achieved-pose relabel HDF5로 저장.
-    obs에 wrench_wrist_R((6,32))도 포함한다.
-
-    use_hand=True면 오른손(hand_pose_R, 7D)도 obs로 넣고, action 라벨을 16D
-    (achieved pose 9D + achieved hand 7D)로 만든다. 교정 구간(stage=1)에서 사람이
-    마누스로 민 손자세가 그대로 achieved 손 타깃이 된다."""
+    obs에 wrench_wrist_R((6,32))도 포함한다."""
     ep_index = replay_buffer.n_episodes - 1
-    pose, quat, wrench, hand, _ = _extract_lowdim_box(replay_buffer, ep_index)
-    if use_hand and hand is None:
-        raise KeyError(
-            "use_hand=True인데 replay_buffer에 hand_pose_R가 없습니다. "
-            "env를 use_hand=True로 실행했는지 확인하세요.")
+    pose, quat, wrench, _ = _extract_lowdim_box(replay_buffer, ep_index)
     T = len(pose)
     frames = load_episode_frames(
         env_output_dir, ep_index, n_steps=T,
@@ -184,22 +174,15 @@ def relabel_last_episode_to_hdf5_box(replay_buffer, env_output_dir, out_path,
     pose = pose[:L]
     quat = quat[:L]
     wrench = wrench[:L] if wrench is not None else None
-    hand = hand[:L] if hand is not None else None
 
     Tm = min(len(pose), len(image0))
     obs_image0 = image0[:Tm - 1]
     obs_pose = pose[:Tm - 1]
     obs_quat = quat[:Tm - 1]
     obs_wrench = wrench[:Tm - 1] if wrench is not None else None
-    obs_hand = hand[:Tm - 1] if (use_hand and hand is not None) else None
     achieved_pose = pose[1:Tm]
     achieved_quat = quat[1:Tm]
     actions_9d = pose_quat_to_9d(achieved_pose, achieved_quat)
-    if use_hand and hand is not None:
-        achieved_hand = hand[1:Tm].astype(np.float32)
-        actions = np.concatenate([actions_9d, achieved_hand], axis=1)   # (Tm-1, 16)
-    else:
-        actions = actions_9d
 
     if np.issubdtype(obs_image0.dtype, np.floating):
         images_uint8 = np.clip(obs_image0 * 255.0, 0, 255).astype(np.uint8)
@@ -215,7 +198,5 @@ def relabel_last_episode_to_hdf5_box(replay_buffer, env_output_dir, out_path,
         obs.create_dataset("image0", data=images_uint8)
         if obs_wrench is not None:
             obs.create_dataset("wrench_wrist_R", data=obs_wrench.astype(np.float32))
-        if obs_hand is not None:
-            obs.create_dataset("hand_pose_R", data=obs_hand.astype(np.float32))
-        grp.create_dataset("actions", data=actions)
+        grp.create_dataset("actions", data=actions_9d)
     return out_path
