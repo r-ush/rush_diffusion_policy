@@ -50,6 +50,7 @@ from diffusion_policy.real_world.real_inference_util import (
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
+from analysis.modality_attribution.record_infer_obs import InferenceObsRecorder
 
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
@@ -962,7 +963,8 @@ def _finish_episode_and_save_diagnostics(
         action_records,
         steps_per_inference,
         image_records,
-        reason):
+        reason,
+        obs_recorder=None):
     if episode_id is None:
         return
 
@@ -987,6 +989,11 @@ def _finish_episode_and_save_diagnostics(
             steps_per_inference,
             image_records=image_records,
         )
+        if obs_recorder is not None:
+            try:
+                obs_recorder.save(output_dir, episode_id)
+            except Exception as e:
+                print(f"[WARNING] Failed to save inference obs snapshots: {e}")
         print(f"Episode {episode_id:06d} finalize complete.")
     finally:
         _restore_signal_handlers(old_handlers)
@@ -1205,6 +1212,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                 episode_id = None
                 action_debug_records = []
                 image_debug_records = []
+                obs_recorder = InferenceObsRecorder()
                 try:
                     # start episode
                     policy.reset()
@@ -1214,6 +1222,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                     episode_id = env.replay_buffer.n_episodes
                     action_debug_records = []
                     image_debug_records = []
+                    obs_recorder = InferenceObsRecorder()
                     # print("[TIME] t_start: ", t_start%100)
 
                     env.start_episode(eval_t_start)   # 영상 저장 시작
@@ -1282,10 +1291,17 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                                     "images": inference_images,
                                 })
                        
-                            obs_dict = dict_apply(obs_dict_np, 
+                            obs_recorder.add(
+                                inference_index,
+                                obs_dict_np,
+                                obs_timestamps,
+                                eval_t_start,
+                            )
+
+                            obs_dict = dict_apply(obs_dict_np,
                                 lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
-                            
-                            # action  
+
+                            # action
                             if use_pigdm == True:
                                 result = policy.predict_action_pigdm(obs_dict, obs)
                             else:
@@ -1398,6 +1414,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                                 steps_per_inference=steps_per_inference,
                                 image_records=image_debug_records,
                                 reason="operator stop",
+                                obs_recorder=obs_recorder,
                             )
                             print('Stopped.')
                             break
@@ -1418,6 +1435,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                                 steps_per_inference=steps_per_inference,
                                 image_records=image_debug_records,
                                 reason="timeout",
+                                obs_recorder=obs_recorder,
                             )
                             break
 
@@ -1439,6 +1457,7 @@ def main(input, output, robot_ip, match_dataset, match_episode,
                         steps_per_inference=steps_per_inference,
                         image_records=image_debug_records,
                         reason="keyboard interrupt",
+                        obs_recorder=obs_recorder,
                     )
                     print("Stopped.")
                     return
