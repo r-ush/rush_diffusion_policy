@@ -201,6 +201,23 @@ def make_replace_vision(policy, value_obs: Dict[str, torch.Tensor]) -> Callable:
     return fn
 
 
+def make_blank_vision(policy) -> Callable:
+    """rgb를 (그 프레임의) 채널 평균색으로 통째 교체 = '시각 정보 제거'.
+
+    zero-wrench('힘이 없었다면')의 vision 대응('안 보였다면'). freeze-to-start와 달리
+    로봇 이동량에 의존하지 않아 vision vs wrench 를 공정하게 비교할 수 있다.
+    """
+    def fn(obs_dict):
+        out = clone_obs(obs_dict)
+        for key in policy.rgb_keys:
+            if key in out:
+                x = out[key]                       # (B, T, C, H, W)
+                mean = x.mean(dim=(1, 3, 4), keepdim=True)   # (B,1,C,1,1) 채널 평균
+                out[key] = mean.expand_as(x).clone()
+        return out
+    return fn
+
+
 def make_replace_low_dim(policy, value_obs: Dict[str, torch.Tensor]) -> Callable:
     """low_dim(pose 등)을 기준 obs로 교체."""
     ref = {k: value_obs[k].clone() for k in policy.low_dim_keys if k in value_obs}

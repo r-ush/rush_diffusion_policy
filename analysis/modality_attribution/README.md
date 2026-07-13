@@ -19,10 +19,53 @@
 
 | 파일 | 역할 |
 |---|---|
-| `attribution.py` | 핵심 라이브러리: ablation / gradient saliency / attention capture / feature layout |
-| `record_infer_obs.py` | rollout 때 inference obs를 그대로 저장하는 drop-in recorder |
-| `replay_offline.py` | **메인 오프라인 스크립트**: 체크포인트 + obs 덤프 → modality별 Δ 시간축 그래프/CSV |
+| `attribution.py` | 핵심 라이브러리: seed 고정 예측, `action_delta`, baseline 빌더(`make_zero_wrench`/`make_blank_vision`/`make_replace_low_dim`/`make_freeze_vision`), `ablation_deltas`, gradient/attention |
+| `record_infer_obs.py` | rollout 때 inference obs를 그대로 저장하는 recorder (**online actor엔 내장·자동 저장**, eval 스크립트도 호출) |
+| `replay_offline.py` | 오프라인 modality Δ 시간축 그래프/CSV (vision vs wrench) |
+| `visualize_attribution.py` | 정적 PNG: **vision occlusion saliency 몽타주** + **force 축별(Fx~Tz) 히트맵** |
+| `build_attribution_viewer.py` | **★ 인터랙티브 HTML 뷰어**: 프레임 슬라이더 + saliency + force축 막대 + **3-way dominance(vision/wrench/joint)** |
+| `batch_build_viewers.py` | eval_debug 스캔 → 뷰어 없는 에피소드만 자동 생성 (`--loop`로 감시 모드) |
+| `combine_pngs.py` | 여러 PNG를 세로/가로로 결합 |
+| `analyze_force_influence.py` | force 영향이 작은지 진단(민감도 스윕 + 공정 baseline 비교) |
+| `analyze_wrench_bottleneck.py` | wrench 저조 **원인 메커니즘 분해**(토큰 변동성 / attention / projection 가중치) |
 | `README.md` | 이 문서 |
+
+## ⚡ 빠른 사용법 (커맨드 요약)
+
+```bash
+PY=/home/vision/venv_diffusion/bin/python                                        # timm+imagecodecs 있는 env
+CKPT=data/outputs/260710_insert_box_hand_wrench_abs/epoch=0900-train_loss=0.001.ckpt
+RUN=data/online_runs/run_hand/actor_episodes
+
+# 0) 데이터: online actor를 --use_hand로 돌리고 에피소드를 '유지 종료'하면
+#    $RUN/eval_debug/episode_XXXXXX_infer_obs.hdf5 가 자동 저장됨 (recorder 내장).
+
+# 1) ★ 새 에피소드 분석자료(뷰어) 자동 생성 — 뷰어 없는 것만 만들고 있는 건 스킵
+$PY -m analysis.modality_attribution.batch_build_viewers -i $CKPT
+#    감시 모드(롤아웃 끝날 때마다 자동 생성): 끝에 --loop 30 추가
+
+# 2) 뷰어 열기 (브라우저, 데이터·이미지가 파일 하나에 embed — 외부 전송 없음)
+xdg-open $RUN/attribution_ep000017/viewer.html
+
+# ── 단일 에피소드 / 저수준 도구 ──
+# 인터랙티브 뷰어 하나만
+$PY -m analysis.modality_attribution.build_attribution_viewer \
+    -i $CKPT --obs $RUN/eval_debug/episode_000017_infer_obs.hdf5 \
+    -o $RUN/attribution_ep000017/viewer.html --grid 8 --seeds 0,1 --frames all
+# 정적 PNG(saliency 몽타주 + force 축 히트맵)
+$PY -m analysis.modality_attribution.visualize_attribution -i $CKPT --obs <infer_obs> -o <dir>/detail
+# 시간축 Δ 그래프/CSV
+$PY -m analysis.modality_attribution.replay_offline -i $CKPT --obs <infer_obs> -o <dir>/attribution
+# force 영향 진단 / wrench 병목 메커니즘
+$PY -m analysis.modality_attribution.analyze_force_influence  -i $CKPT --obs <infer_obs>
+$PY -m analysis.modality_attribution.analyze_wrench_bottleneck -i $CKPT --obs <infer_obs>
+```
+
+### 뷰어 읽는 법
+- **Modality dominance 배지**: 그 프레임 최강 modality — 🟢JOINT(proprioception) / 🔵VISION / 🔴WRENCH.
+- **Δvision/Δwrench/Δjoint**: 해당 modality를 공정 baseline으로 지웠을 때 action 변화(클수록 의존).
+- **좌측 saliency**: 이미지의 어디를 보나(빨강=가리면 action 크게 바뀜). **force 막대**: 어느 축(Fx~Tz)이 중요.
+- **하단 타임라인**: 3색 Δ 곡선(초록/파랑/빨강), 클릭=그 프레임 점프.
 
 ## 방법 4가지 (필요하면 바꿔가며 쓰기)
 
@@ -121,3 +164,23 @@ print(attr.capture_modality_attention(policy, obs_dict))
 - **덤프가 없으면 못 돈다.** 기존 `policy_targets.hdf5`에는 wrench history window가 없어 재현 불가.
 - ablation baseline이 학습 분포 밖(OOD)이면 Δ가 과장될 수 있다. seed 여러 개 + 여러 baseline 교차확인 권장.
 - gradient/attention은 근사다. 결론은 ablation(#1)을 1차로, 나머지는 교차검증으로.
+
+## 결과 해석 & 발견 (중요, 2026-07)
+
+### 공정 baseline (freeze-to-start 금지)
+- **vision baseline은 `mean`(중립 이미지로 교체)이 공정**이다 = zero-wrench의 대응. 도구 기본값도 `mean`.
+- `freeze-to-start`(첫 프레임 고정)는 로봇이 움직일수록 Δ가 끝없이 커져 **vision을 과대평가**한다(초기 오해의 원인).
+- `self`(직전 프레임 고정)는 2프레임 광류만 재므로 **과소평가** — vision 의존도의 척도가 아님.
+- 축별 공정성 요약: vision=`make_blank_vision` / wrench=`make_zero_wrench` / joint=평균 low_dim(`make_replace_low_dim`).
+
+### 3-way dominance (joint 추가)
+- vision·wrench만 보면 애매 → **joint(=`robot_pose_R`+`robot_quat_R`+`hand_pose_R`)** 추가해 3-way로 본다.
+- 이 정책(abs action)은 대체로 **joint ≳ vision ≫ wrench**. abs 목표를 내려면 현재 pose가 필수라 joint가 최대.
+
+### wrench 영향이 낮은 원인 (`analyze_wrench_bottleneck.py`로 실측)
+- 이 ckpt는 **`modality-attention` fusion**: 토큰 `[vis_t0, vis_t1, wrench]` 각 512차원(동일).
+- **concat 크기 문제 아님**(동일 512차원), **projection 가중치도 wrench가 오히려 큼**(공정).
+- **진짜 병목**: wrench 토큰 출력 변동성이 vision의 ~1/7 (std 0.0018 vs 0.012) → **유효 기여 ≈ 8.6%**.
+  = 인코더가 force를 사실상 상수로 뭉갬(**virtual-target action이 pose+vision으로 결정돼 force→action 신호가 약함**).
+- **개선 방향**(우선순위): ①학습신호(vision **modality dropout** + force-reactive correction 데이터 + auxiliary force 예측) → ②토큰 **LayerNorm/gain**으로 스케일 균형 → ③명시적 `action=base+Δ(force)` 경로 + 접촉 가중 loss → ④dilated causal conv.
+- 개선 후 **같은 attribution 툴로 Δwrench 재측정**해 검증하는 루프를 권장.

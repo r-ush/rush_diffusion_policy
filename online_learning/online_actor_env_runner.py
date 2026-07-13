@@ -92,6 +92,7 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from online_learning import config_online as C
 from online_learning.mailbox import FileMailbox
 from online_learning.relabel_utils import relabel_last_episode_to_hdf5_box, pose_quat_to_9d
+from analysis.modality_attribution.record_infer_obs import InferenceObsRecorder
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -276,13 +277,15 @@ class KeyReader:
 @click.option('--wrench_noise_seed', '--wrench-noise-seed', default=None, type=int, help='정책 wrench 관측 노이즈용 RNG seed(옵션).')
 @click.option('--record_wrist_wrench/--no_record_wrist_wrench', default=True, help="에피소드 timeseries HDF5에 오른손목 FT 기록.")
 @click.option('--use_hand/--no_use_hand', default=False, help='오른손 7-DoF 관측·행동 제어 활성화.')
+@click.option('--record_infer_obs/--no_record_infer_obs', default=True,
+              help='정책 추론 obs를 <output>/eval_debug/episode_XXXXXX_infer_obs.hdf5로 덤프(modality attribution용).')
 def main(input, output, robot_ip, steps_per_inference,
          max_duration, frequency, num_inference_steps,
          wrench_noise_force_mean, wrench_noise_force_std,
          wrench_noise_force_uniform_min, wrench_noise_force_uniform_max,
          wrench_noise_torque_mean, wrench_noise_torque_std,
          wrench_noise_torque_uniform_min, wrench_noise_torque_uniform_max,
-         wrench_noise_seed, record_wrist_wrench, use_hand):
+         wrench_noise_seed, record_wrist_wrench, use_hand, record_infer_obs):
     ckpt_path = input if input is not None else C.BASE_CKPT
     output_dir = output if output is not None else C.ACTOR_OUTPUT_DIR
     os.makedirs(output_dir, exist_ok=True)
@@ -326,7 +329,9 @@ def main(input, output, robot_ip, steps_per_inference,
     print(f"[Actor] wrench noise torque mean/uniform/std: {wrench_noise_torque_mean} / "
           f"({wrench_noise_torque_uniform_min},{wrench_noise_torque_uniform_max}) / {wrench_noise_torque_std}")
 
-    def make_obs_dict(obs):
+    def make_obs_dict_np(obs):
+        # 정책에 실제로 들어가는 numpy obs dict (get_real_obs_dict + wrench noise, 배치차원 전).
+        # infer_obs 덤프(record_infer_obs)가 이 스냅샷을 저장한다.
         if obs_pose_repr == 'relative':
             d = get_real_relative_obs_dict(env_obs=obs, shape_meta=cfg.task.shape_meta)
         else:
@@ -344,7 +349,13 @@ def main(input, output, robot_ip, steps_per_inference,
             torque_uniform_max=wrench_noise_torque_uniform_max,
             torque_std=wrench_noise_torque_std,
         )
+        return d
+
+    def obs_np_to_tensor(d):
         return dict_apply(d, lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
+
+    def make_obs_dict(obs):
+        return obs_np_to_tensor(make_obs_dict_np(obs))
 
     with SharedMemoryManager() as shm_manager:
         with DualarmRealEnv(
@@ -438,6 +449,8 @@ def main(input, output, robot_ip, steps_per_inference,
                     print("[Actor] 에피소드 시작!")
 
                     iter_idx = 0
+                    inference_index = 0   # 정책 추론 카운터 (infer_obs 라벨)
+                    obs_recorder = InferenceObsRecorder() if record_infer_obs else None
                     mode = 'policy'       # process_key가 nonlocal로 갱신
                     keep = True
                     quit_all = False
@@ -454,9 +467,15 @@ def main(input, output, robot_ip, steps_per_inference,
 
                         # ── 제어 ──
                         if mode == 'policy':
+                            obs_dict_np = make_obs_dict_np(obs)
                             with torch.no_grad():
-                                result = policy.predict_action(make_obs_dict(obs))
-                                action = result['action'][0].detach().cpu().numpy()  # [H,9]
+                                result = policy.predict_action(obs_np_to_tensor(obs_dict_np))
+                                action = result['action'][0].detach().cpu().numpy()  # [H,9 또는 16]
+                            # 이 추론에 실제로 들어간 obs를 덤프(로봇 없이 replay_offline로 재생/분석)
+                            if obs_recorder is not None:
+                                obs_recorder.add(inference_index, obs_dict_np,
+                                                 obs_timestamps, eval_t_start)
+                                inference_index += 1
 
                             this_target_poses = np.zeros((len(action), action.shape[-1]),
                                                          dtype=np.float64)
@@ -537,6 +556,16 @@ def main(input, output, robot_ip, steps_per_inference,
                         teleop.publish(4)
                         env.resume_robot()
                         mode = 'policy'
+
+                    # ── 정책 추론 obs 덤프 저장 (유지된 에피소드) ──
+                    #   <output>/eval_debug/episode_XXXXXX_infer_obs.hdf5 →
+                    #   analysis.modality_attribution.replay_offline --obs 로 재생/분석.
+                    if keep and obs_recorder is not None and len(obs_recorder) > 0:
+                        try:
+                            _ep_idx = env.replay_buffer.n_episodes - 1
+                            obs_recorder.save(output_dir, _ep_idx)
+                        except Exception as e:
+                            print(f"[Actor] infer_obs 덤프 저장 실패: {e}")
 
                     # ── 유지된 에피소드를 relabel 후 learner로 전송 ──
                     if keep and C.SEND_TRANSITIONS:
