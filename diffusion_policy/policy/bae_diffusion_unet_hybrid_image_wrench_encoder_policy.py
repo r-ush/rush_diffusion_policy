@@ -311,7 +311,9 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
         # 학습 repo에서 force_regularization.aux_next_wrench_weight>0 으로 학습된
         # 체크포인트에는 aux_next_wrench_head 파라미터가 들어있으므로, 동일 구조의
         # 모듈을 만들어 두어야 strict state_dict 로드가 실패하지 않는다.
-        force_regularization = kwargs.get('force_regularization', None) or {}
+        # pop으로 꺼내서 self.kwargs(=scheduler.step 전용 인자)로 새어들어가
+        # scheduler.step(force_regularization=...) 같은 오류가 나지 않게 한다.
+        force_regularization = kwargs.pop('force_regularization', None) or {}
         aux_next_wrench_weight = float(
             force_regularization.get('aux_next_wrench_weight', 0.0))
         self.aux_next_wrench_weight = aux_next_wrench_weight
