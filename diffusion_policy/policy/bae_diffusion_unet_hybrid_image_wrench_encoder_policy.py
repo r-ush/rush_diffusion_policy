@@ -307,6 +307,22 @@ class DiffusionUnetHybridImagePolicy(BaseImagePolicy):
             cond_predict_scale=cond_predict_scale
         )
 
+        # aux next-wrench head (학습 전용 보조 loss용; inference에서는 사용 안 함).
+        # 학습 repo에서 force_regularization.aux_next_wrench_weight>0 으로 학습된
+        # 체크포인트에는 aux_next_wrench_head 파라미터가 들어있으므로, 동일 구조의
+        # 모듈을 만들어 두어야 strict state_dict 로드가 실패하지 않는다.
+        force_regularization = kwargs.get('force_regularization', None) or {}
+        aux_next_wrench_weight = float(
+            force_regularization.get('aux_next_wrench_weight', 0.0))
+        self.aux_next_wrench_weight = aux_next_wrench_weight
+        self.aux_next_wrench_head = None
+        if aux_next_wrench_weight > 0.0:
+            if force_feature_dim == 0:
+                raise ValueError(
+                    "aux_next_wrench_weight requires at least one wrench observation")
+            self.aux_next_wrench_head = nn.Linear(
+                force_feature_dim, self.num_wrench_component)
+
         self.obs_config = obs_config
         self.vision_model_name = vc.model_name
         self.vision_encoder = vision_encoder
