@@ -20,7 +20,8 @@
 | 파일 | 역할 |
 |---|---|
 | `attribution.py` | 핵심 라이브러리: seed 고정 예측, `action_delta`, baseline 빌더(`make_zero_wrench`/`make_blank_vision`/`make_replace_low_dim`/`make_freeze_vision`), `ablation_deltas`, gradient/attention |
-| `record_infer_obs.py` | rollout 때 inference obs를 그대로 저장하는 recorder (**online actor엔 내장·자동 저장**, eval 스크립트도 호출) |
+| `record_infer_obs.py` | rollout 때 inference obs를 그대로 저장하는 recorder (**online actor엔 내장·자동 저장**, rush의 eval 스크립트도 호출) |
+| `infer_obs_from_eval_dir.py` | recorder 없이 받은 eval 결과 폴더에서 infer_obs를 **사후 재구성**(replay_buffer.zarr의 lowdim·wrench 윈도우 + policy_targets.hdf5의 실제 obs 이미지) |
 | `replay_offline.py` | 오프라인 modality Δ 시간축 그래프/CSV (vision vs wrench) |
 | `visualize_attribution.py` | 정적 PNG: **vision occlusion saliency 몽타주** + **force 축별(Fx~Tz) 히트맵** |
 | `build_attribution_viewer.py` | **★ 인터랙티브 HTML 뷰어**: 프레임 슬라이더 + saliency + force축 막대 + **3-way dominance(vision/wrench/joint)** |
@@ -39,6 +40,13 @@ RUN=data/online_runs/run_hand/actor_episodes
 
 # 0) 데이터: online actor를 --use_hand로 돌리고 에피소드를 '유지 종료'하면
 #    $RUN/eval_debug/episode_XXXXXX_infer_obs.hdf5 가 자동 저장됨 (recorder 내장).
+#
+# 0-b) recorder가 없는 eval로 이미 받아둔 결과 폴더(data/results/<run>)를 분석하려면
+#      infer_obs를 사후 재구성한다 (replay_buffer.zarr + policy_targets.hdf5 이용).
+$PY -m analysis.modality_attribution.infer_obs_from_eval_dir \
+    -i $CKPT --eval_dir /path/to/data/results/<run>
+#      -> <eval_dir>/eval_debug/episode_XXXXXX_infer_obs.hdf5 생성. 이후 아래 도구 전부 동일하게 사용.
+#      (검증: 재구성 obs로 재예측한 action이 롤아웃이 기록한 virtual target과 평균 ~2mm 일치)
 
 # 1) ★ 새 에피소드 분석자료(뷰어) 자동 생성 — 뷰어 없는 것만 만들고 있는 건 스킵
 $PY -m analysis.modality_attribution.batch_build_viewers -i $CKPT

@@ -4,8 +4,9 @@
 프레임(추론)을 슬라이더/버튼으로 넘기며:
   - vision occlusion saliency 오버레이 (어디를 보나)
   - force 6축(Fx/Fy/Fz/Tx/Ty/Tz) 막대 (어떤 축이 중요)
-  - modality 지배도(Δvision vs Δwrench) 수치 + VISION/WRENCH 배지
-  - 하단 타임라인(클릭해서 프레임 점프)
+  - modality 지배도: 절대 Δ(vision/wrench/joint) + 그 스텝의 **상대 비율 %**
+    (100% 누적막대 + 개별 %막대; Δ 합도 같이 표시 — 합이 0에 가까우면 비율은 무의미)
+  - 하단 타임라인(클릭해서 프레임 점프): **절대 Δ ↔ 비율 100% 누적영역** 토글
 를 함께 본다. 모든 데이터/이미지를 HTML 안에 embed → 서버 없이 파일만 열면 됨(외부 전송 없음).
 
 사용 예:
@@ -77,6 +78,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .bar-track { flex:1; background:#333; border-radius:4px; height:16px; overflow:hidden; }
   .bar-fill { height:100%; border-radius:4px; }
   .bar-row .val { width:60px; color:#aaa; font-variant-numeric:tabular-nums; }
+  .bar-row .lbl.wide { width:46px; }
+  .bar-row .val.wide { width:118px; color:#ccc; }
+  .stack { display:flex; height:20px; border-radius:5px; overflow:hidden; margin:10px 0 4px; background:#333; }
+  .stack div { height:100%; display:flex; align-items:center; justify-content:center;
+               font-size:11px; font-weight:700; color:#fff; overflow:hidden; }
+  .hint { font-size:11px; color:#888; margin-top:6px; }
   .controls { display:flex; align-items:center; gap:10px; padding:0 18px 8px; flex-wrap:wrap; }
   .controls button { background:#333; color:#eee; border:none; padding:7px 12px; border-radius:6px; cursor:pointer; font-size:14px; }
   .controls button:hover { background:#444; }
@@ -100,6 +107,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <button id="next">다음 ▶</button>
   <input type="range" id="slider" min="0" value="0">
   <span id="frameLabel"></span>
+  <button id="mode">타임라인: 절대 Δ</button>
 </div>
 
 <div class="wrap">
@@ -114,6 +122,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="kv">Δ vision = <b id="dv"></b></div>
       <div class="kv">Δ wrench = <b id="dw"></b></div>
       <div class="kv">Δ joint&nbsp; = <b id="dj"></b> <span style="color:#888">(robot pose/quat + hand)</span></div>
+      <div class="kv" style="margin-top:10px;">이 스텝의 상대 비율 (Δ 합 = <b id="dsum"></b>)</div>
+      <div class="stack" id="stack"></div>
+      <div id="sharebars"></div>
+      <div class="hint">비율 = 각 Δ / (Δvision+Δwrench+Δjoint). 합이 작은 프레임은 어느 modality에도
+        둔감한 구간이라 비율만 보면 오해할 수 있음 → Δ 합을 함께 볼 것.</div>
     </div>
     <div class="panel">
       <h2>Force per-axis (축을 0으로 껐을 때 Δaction)</h2>
@@ -124,9 +137,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <svg id="timeline" viewBox="0 0 1000 180" preserveAspectRatio="none"></svg>
 <div class="legend">
-  <span><span class="dot" style="background:#1f77b4"></span>Δ vision</span>
-  <span><span class="dot" style="background:#d62728"></span>Δ wrench</span>
-  <span><span class="dot" style="background:#2ca02c"></span>Δ joint</span>
+  <span><span class="dot" style="background:#1f77b4"></span>vision</span>
+  <span><span class="dot" style="background:#d62728"></span>wrench</span>
+  <span><span class="dot" style="background:#2ca02c"></span>joint</span>
+  <span id="legendMode">· 절대 Δaction (버튼으로 비율 %로 전환)</span>
   <span>· 타임라인 클릭 = 그 프레임으로 점프</span>
 </div>
 
@@ -134,7 +148,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 const DATA = __DATA__;
 const F = DATA.frames, AX = DATA.axis_labels;
 const AXCOL = ["#d62728","#d62728","#d62728","#1f77b4","#1f77b4","#1f77b4"];
-let cur = 0, playing = false, timer = null;
+const MCOL = {vision:"#1f77b4", wrench:"#d62728", joint:"#2ca02c"};
+let cur = 0, playing = false, timer = null, pctMode = false;
 
 const $ = id => document.getElementById(id);
 const slider = $("slider"); slider.max = F.length - 1;
@@ -143,6 +158,38 @@ const maxForce = Math.max(1e-9, ...F.flatMap(f => f.force));
 const maxDelta = Math.max(1e-9, ...F.flatMap(f => [f.dv, f.dw, f.dj].filter(x => !isNaN(x))));
 
 function fmt(x){ return (x==null||isNaN(x)) ? "–" : x.toFixed(4); }
+function pct(x){ return (x==null||isNaN(x)) ? "–" : (100*x).toFixed(1) + "%"; }
+
+// 한 프레임의 modality 상대 비율. Δ는 거리라 음수가 없지만 방어적으로 0 클램프.
+function shares(f){
+  const v = Math.max(0, isNaN(f.dv)?0:f.dv);
+  const w = Math.max(0, isNaN(f.dw)?0:f.dw);
+  const j = Math.max(0, isNaN(f.dj)?0:f.dj);
+  const s = v + w + j;
+  if (s <= 1e-12) return {vision:NaN, wrench:NaN, joint:NaN, sum:s};
+  return {vision:v/s, wrench:w/s, joint:j/s, sum:s};
+}
+const SH = F.map(shares);
+
+function renderShares(i){
+  const sh = SH[i];
+  $("dsum").textContent = fmt(sh.sum);
+  const keys = ["vision","wrench","joint"];
+  // 100% 누적 막대
+  $("stack").innerHTML = isNaN(sh.vision) ? `<div style="width:100%;background:#333;color:#888">Δ≈0 (무반응)</div>`
+    : keys.map(k => {
+        const p = 100*sh[k];
+        return `<div style="width:${p}%;background:${MCOL[k]}">${p >= 9 ? p.toFixed(0)+"%" : ""}</div>`;
+      }).join("");
+  // 개별 비율 막대
+  $("sharebars").innerHTML = keys.map(k => {
+    const p = isNaN(sh[k]) ? 0 : 100*sh[k];
+    const dval = k==="vision" ? F[i].dv : (k==="wrench" ? F[i].dw : F[i].dj);
+    return `<div class="bar-row"><span class="lbl wide">${k}</span>`
+         + `<span class="bar-track"><span class="bar-fill" style="width:${Math.max(0.5,p)}%;background:${MCOL[k]}"></span></span>`
+         + `<span class="val wide">${pct(isNaN(sh[k])?NaN:sh[k])} <span style="color:#777">(Δ ${fmt(dval)})</span></span></div>`;
+  }).join("");
+}
 
 function renderForce(f){
   let html = "";
@@ -158,18 +205,46 @@ function renderForce(f){
 function renderTimeline(){
   const N=F.length, W=1000, H=180, pad=24;
   const x = i => pad + (W-2*pad)*(N<2?0.5:i/(N-1));
-  const y = v => H-pad - (H-2*pad)*(v/maxDelta);
   let svg = "";
-  // grid baseline
   svg += `<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#444"/>`;
-  const line = (key,col) => {
-    let d = F.map((f,i)=>`${i===0?'M':'L'}${x(i).toFixed(1)},${y(f[key]).toFixed(1)}`).join(' ');
-    return `<path d="${d}" fill="none" stroke="${col}" stroke-width="2"/>`
-         + F.map((f,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(f[key]).toFixed(1)}" r="3" fill="${col}"/>`).join('');
-  };
-  svg += line('dv',"#1f77b4") + line('dw',"#d62728") + line('dj',"#2ca02c");
+
+  if(!pctMode){
+    const y = v => H-pad - (H-2*pad)*(v/maxDelta);
+    const line = (key,col) => {
+      let d = F.map((f,i)=>`${i===0?'M':'L'}${x(i).toFixed(1)},${y(f[key]).toFixed(1)}`).join(' ');
+      return `<path d="${d}" fill="none" stroke="${col}" stroke-width="2"/>`
+           + F.map((f,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(f[key]).toFixed(1)}" r="3" fill="${col}"/>`).join('');
+    };
+    svg += line('dv',"#1f77b4") + line('dw',"#d62728") + line('dj',"#2ca02c");
+    svg += `<text x="${pad}" y="14" fill="#888" font-size="11">Δaction (절대) · 최대 ${maxDelta.toFixed(3)}</text>`;
+  } else {
+    // 100% 누적 영역: vision → wrench → joint 순으로 쌓는다.
+    const y = v => H-pad - (H-2*pad)*v;   // v: 0..1 누적비율
+    const keys = ["vision","wrench","joint"];
+    let base = F.map(()=>0);
+    for(const k of keys){
+      const top = SH.map((sh,i) => base[i] + (isNaN(sh[k]) ? 0 : sh[k]));
+      const up = F.map((f,i)=>`${i===0?'M':'L'}${x(i).toFixed(1)},${y(top[i]).toFixed(1)}`).join(' ');
+      const down = F.map((f,i)=>i).reverse()
+        .map(i=>`L${x(i).toFixed(1)},${y(base[i]).toFixed(1)}`).join(' ');
+      svg += `<path d="${up} ${down} Z" fill="${MCOL[k]}" fill-opacity="0.85" stroke="none"/>`;
+      base = top;
+    }
+    // Δ 합이 0에 가까운(=무반응) 프레임은 비율이 의미없음 → 회색으로 덮는다.
+    SH.forEach((sh,i)=>{
+      if(isNaN(sh.vision)){
+        const w=(W-2*pad)/Math.max(1,N-1);
+        svg += `<rect x="${(x(i)-w/2).toFixed(1)}" y="${pad}" width="${w.toFixed(1)}" height="${H-2*pad}" fill="#555"/>`;
+      }
+    });
+    svg += `<text x="${pad}" y="14" fill="#888" font-size="11">modality 상대 비율 (프레임마다 합=100%)</text>`;
+    [0.5, 1.0].forEach(v => {
+      svg += `<line x1="${pad}" y1="${y(v)}" x2="${W-pad}" y2="${y(v)}" stroke="#666" stroke-dasharray="3 3"/>`
+           + `<text x="${W-pad+2}" y="${y(v)+4}" fill="#888" font-size="10">${(100*v).toFixed(0)}%</text>`;
+    });
+  }
+
   svg += `<line id="marker" x1="${x(cur)}" y1="6" x2="${x(cur)}" y2="${H-6}" stroke="#fff" stroke-width="1.5" stroke-dasharray="4 3"/>`;
-  // clickable overlay rects
   for(let i=0;i<N;i++){
     const cx=x(i), w=(W-2*pad)/Math.max(1,N-1);
     svg += `<rect x="${(cx-w/2).toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${H}" fill="transparent" style="cursor:pointer" onclick="go(${i})"/>`;
@@ -189,6 +264,7 @@ function render(){
   $("badge").innerHTML = `<span class="badge ${dom}">${dom.toUpperCase()} dominant</span>`;
   $("frameLabel").textContent = `inf ${f.idx} · t=${f.t.toFixed(2)}s · ${cur+1}/${F.length}`;
   slider.value = cur;
+  renderShares(cur);
   renderForce(f);
   renderTimeline();
 }
@@ -196,6 +272,14 @@ function go(i){ cur = Math.max(0, Math.min(F.length-1, i)); render(); }
 $("prev").onclick = ()=>go(cur-1);
 $("next").onclick = ()=>go(cur+1);
 slider.oninput = e => go(parseInt(e.target.value));
+$("mode").onclick = function(){
+  pctMode = !pctMode;
+  this.textContent = pctMode ? "타임라인: 비율 %" : "타임라인: 절대 Δ";
+  $("legendMode").textContent = pctMode
+    ? "· 상대 비율 100% 누적 (회색 = Δ≈0, 비율 무의미)"
+    : "· 절대 Δaction (버튼으로 비율 %로 전환)";
+  renderTimeline();
+};
 $("play").onclick = function(){
   playing = !playing; this.textContent = playing ? "⏸ 정지" : "▶ 재생";
   if(playing){ timer = setInterval(()=>{ go(cur>=F.length-1?0:cur+1); }, 700); }
@@ -287,8 +371,11 @@ def main(input, obs, output, num_inference_steps, seeds, grid, occ_chunk, frames
         t = float(elapsed_s[i]) if np.isfinite(elapsed_s[i]) else float(i)
         frames_data.append({"idx": int(inference_index[i]), "t": t,
                             "dv": dv, "dw": dw, "dj": dj, "force": force, "img": img_b64})
-        print(f"  [{j+1}/{len(sel)}] inf {int(inference_index[i])}: dom_v={dv:.4f} dom_w={dw:.4f} "
-              f"dom_j={dj:.4f}  topforce={WRENCH_AXIS_LABELS[int(np.argmax(force))] if wrench_key else '-'}")
+        tot = sum(max(0.0, x) for x in (dv, dw, dj) if np.isfinite(x))
+        share = (lambda x: f"{100*max(0.0, x)/tot:4.1f}%" if (tot > 1e-12 and np.isfinite(x)) else "   –")
+        print(f"  [{j+1}/{len(sel)}] inf {int(inference_index[i])}: "
+              f"dom_v={dv:.4f}({share(dv)}) dom_w={dw:.4f}({share(dw)}) dom_j={dj:.4f}({share(dj)}) "
+              f"sum={tot:.4f}  topforce={WRENCH_AXIS_LABELS[int(np.argmax(force))] if wrench_key else '-'}")
 
     payload = {"axis_labels": WRENCH_AXIS_LABELS, "frames": frames_data}
     title = f"Attribution viewer — {pathlib.Path(obs).name}"
