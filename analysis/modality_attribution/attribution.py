@@ -284,6 +284,89 @@ def ablation_deltas(
 
 
 # ---------------------------------------------------------------------------
+# 1b) joint / conditional ablation  (중복 vs 진짜-미사용 판정)
+# ---------------------------------------------------------------------------
+
+def compose_baselines(*builders: Callable) -> Callable:
+    """여러 baseline 빌더를 순차 적용(= 여러 modality 동시 제거).
+
+    각 빌더는 서로 다른 키만 건드리므로(vision↔wrench↔low_dim) 적용 순서는 무관.
+    """
+    def fn(obs_dict):
+        out = obs_dict
+        for b in builders:
+            out = b(out)
+        return out
+    return fn
+
+
+@dataclass
+class InteractionDeltas:
+    """단일/동시/조건부 ablation Δ (모두 action_delta.total, seed 평균).
+
+    핵심은 conditional: 한 modality를 이미 지운 상태에서 '다른 하나'를 더 지웠을 때의 Δ.
+    - wrench_given_no_vision 이 크면 → vision이 빠지면 wrench가 대응 = '중복에 가려짐(보완 가능)'.
+    - wrench_given_no_vision 이 ~0 이면 → vision이 없어도 wrench 반응 없음 = '진짜 미사용'.
+    """
+    vision: float                    # base 대비 vision 제거 Δ
+    wrench: float                    # base 대비 wrench 제거 Δ
+    both: float                      # base 대비 vision+wrench 동시 제거 Δ
+    wrench_given_no_vision: float    # d(no_vision, no_vision_no_wrench)
+    vision_given_no_wrench: float    # d(no_wrench, no_vision_no_wrench)
+
+    @property
+    def redundancy(self) -> float:
+        """(Δvision+Δwrench − Δboth). >0 = 정보 중복(동시 제거가 합보다 덜 바뀜)."""
+        return self.vision + self.wrench - self.both
+
+    def as_dict(self) -> Dict[str, float]:
+        return {
+            "vision": self.vision, "wrench": self.wrench, "both": self.both,
+            "wrench_given_no_vision": self.wrench_given_no_vision,
+            "vision_given_no_wrench": self.vision_given_no_wrench,
+            "redundancy": self.redundancy,
+        }
+
+
+def interaction_deltas(
+    policy,
+    obs_dict: Dict[str, torch.Tensor],
+    vision_baseline: Callable,
+    wrench_baseline: Callable,
+    seeds: Sequence[int] = (0, 1),
+) -> InteractionDeltas:
+    """vision/wrench 의 단일·동시·조건부 ablation Δ를 한 번에 계산한다.
+
+    같은 seed 안에서 base / no_vision / no_wrench / no_both 를 모두 뽑아 짝지어 비교한다.
+    """
+    seeds = list(seeds)
+
+    def d(a, b):
+        return action_delta(policy, a, b).total
+
+    keys = ["vision", "wrench", "both", "wrench_given_no_vision", "vision_given_no_wrench"]
+    accum: Dict[str, List[float]] = {k: [] for k in keys}
+
+    for s in seeds:
+        obs_noV = vision_baseline(obs_dict)
+        obs_noW = wrench_baseline(obs_dict)
+        obs_noVW = wrench_baseline(obs_noV)   # vision 지운 obs 위에 wrench까지 제거
+
+        base = predict_action(policy, obs_dict, s)["action"]
+        a_noV = predict_action(policy, obs_noV, s)["action"]
+        a_noW = predict_action(policy, obs_noW, s)["action"]
+        a_noVW = predict_action(policy, obs_noVW, s)["action"]
+
+        accum["vision"].append(d(base, a_noV))
+        accum["wrench"].append(d(base, a_noW))
+        accum["both"].append(d(base, a_noVW))
+        accum["wrench_given_no_vision"].append(d(a_noV, a_noVW))
+        accum["vision_given_no_wrench"].append(d(a_noW, a_noVW))
+
+    return InteractionDeltas(**{k: float(np.mean(v)) for k, v in accum.items()})
+
+
+# ---------------------------------------------------------------------------
 # 2) gradient saliency (global_cond 구간별)  -- 실험적
 # ---------------------------------------------------------------------------
 

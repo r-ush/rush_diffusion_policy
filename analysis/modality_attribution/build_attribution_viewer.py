@@ -93,6 +93,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .legend { font-size:11px; color:#aaa; padding:2px 18px 16px; }
   .legend span { margin-right:14px; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle;}
+  .tlcap { font-size:11px; color:#999; padding:10px 18px 2px; font-weight:600; }
 </style>
 </head>
 <body>
@@ -107,7 +108,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <button id="next">다음 ▶</button>
   <input type="range" id="slider" min="0" value="0">
   <span id="frameLabel"></span>
-  <button id="mode">타임라인: 절대 Δ</button>
 </div>
 
 <div class="wrap">
@@ -135,13 +135,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<div class="tlcap">① 절대 Δaction (modality 제거 시 action 변화량 · 값이 클수록 그 modality 의존)</div>
 <svg id="timeline" viewBox="0 0 1000 180" preserveAspectRatio="none"></svg>
+<div class="tlcap">② 상대 비율 (프레임마다 vision+wrench+joint = 100% 누적 · 회색 = Δ≈0라 비율 무의미)</div>
+<svg id="timeline2" viewBox="0 0 1000 180" preserveAspectRatio="none"></svg>
 <div class="legend">
   <span><span class="dot" style="background:#1f77b4"></span>vision</span>
   <span><span class="dot" style="background:#d62728"></span>wrench</span>
   <span><span class="dot" style="background:#2ca02c"></span>joint</span>
-  <span id="legendMode">· 절대 Δaction (버튼으로 비율 %로 전환)</span>
-  <span>· 타임라인 클릭 = 그 프레임으로 점프</span>
+  <span>· 위=절대 Δ, 아래=full-time 상대 비율 · 어느 타임라인이든 클릭 = 그 프레임으로 점프</span>
 </div>
 
 <script>
@@ -149,7 +151,7 @@ const DATA = __DATA__;
 const F = DATA.frames, AX = DATA.axis_labels;
 const AXCOL = ["#d62728","#d62728","#d62728","#1f77b4","#1f77b4","#1f77b4"];
 const MCOL = {vision:"#1f77b4", wrench:"#d62728", joint:"#2ca02c"};
-let cur = 0, playing = false, timer = null, pctMode = false;
+let cur = 0, playing = false, timer = null;
 
 const $ = id => document.getElementById(id);
 const slider = $("slider"); slider.max = F.length - 1;
@@ -202,13 +204,13 @@ function renderForce(f){
   $("forcebars").innerHTML = html;
 }
 
-function renderTimeline(){
+function renderTimeline(svgId, mode){
   const N=F.length, W=1000, H=180, pad=24;
   const x = i => pad + (W-2*pad)*(N<2?0.5:i/(N-1));
   let svg = "";
   svg += `<line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#444"/>`;
 
-  if(!pctMode){
+  if(mode!=="share"){
     const y = v => H-pad - (H-2*pad)*(v/maxDelta);
     const line = (key,col) => {
       let d = F.map((f,i)=>`${i===0?'M':'L'}${x(i).toFixed(1)},${y(f[key]).toFixed(1)}`).join(' ');
@@ -244,12 +246,12 @@ function renderTimeline(){
     });
   }
 
-  svg += `<line id="marker" x1="${x(cur)}" y1="6" x2="${x(cur)}" y2="${H-6}" stroke="#fff" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+  svg += `<line x1="${x(cur)}" y1="6" x2="${x(cur)}" y2="${H-6}" stroke="#fff" stroke-width="1.5" stroke-dasharray="4 3"/>`;
   for(let i=0;i<N;i++){
     const cx=x(i), w=(W-2*pad)/Math.max(1,N-1);
     svg += `<rect x="${(cx-w/2).toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${H}" fill="transparent" style="cursor:pointer" onclick="go(${i})"/>`;
   }
-  $("timeline").innerHTML = svg;
+  $(svgId).innerHTML = svg;
 }
 
 function render(){
@@ -266,20 +268,13 @@ function render(){
   slider.value = cur;
   renderShares(cur);
   renderForce(f);
-  renderTimeline();
+  renderTimeline("timeline", "abs");
+  renderTimeline("timeline2", "share");
 }
 function go(i){ cur = Math.max(0, Math.min(F.length-1, i)); render(); }
 $("prev").onclick = ()=>go(cur-1);
 $("next").onclick = ()=>go(cur+1);
 slider.oninput = e => go(parseInt(e.target.value));
-$("mode").onclick = function(){
-  pctMode = !pctMode;
-  this.textContent = pctMode ? "타임라인: 비율 %" : "타임라인: 절대 Δ";
-  $("legendMode").textContent = pctMode
-    ? "· 상대 비율 100% 누적 (회색 = Δ≈0, 비율 무의미)"
-    : "· 절대 Δaction (버튼으로 비율 %로 전환)";
-  renderTimeline();
-};
 $("play").onclick = function(){
   playing = !playing; this.textContent = playing ? "⏸ 정지" : "▶ 재생";
   if(playing){ timer = setInterval(()=>{ go(cur>=F.length-1?0:cur+1); }, 700); }
