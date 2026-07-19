@@ -112,6 +112,19 @@ def maybe_hotswap_residual_head(mailbox, fast_policy, current_version, device):
     return latest
 
 
+def _fast_head_ready(fast_policy):
+    """learner 가 1회 이상 학습해 normalizer(obs+action 통계)를 채워 발행했는지.
+    learner 는 시작 시 학습 전(demo=0) v0 을 한 번 발행하는데, 그때 normalizer 는
+    아직 set_normalizer 전이라 비어 있다. 빈 normalizer 로 predict_action 하면
+    _build_head_input 의 normalize 가 image0 키에서 죽는다(AttributeError).
+    -> normalizer 가 비어 있으면 residual 을 적용하지 않고 slow-only 로 돌며 교정만 모은다.
+    (교정 데이터 0개일 때 residual=0 은 DAgger 부트스트랩상으로도 올바른 동작.)"""
+    try:
+        return len(fast_policy.normalizer.params_dict) > 0
+    except AttributeError:
+        return False
+
+
 def _to_uint8_image(img):
     """live obs 이미지를 residual 데이터셋이 기대하는 uint8 HWC 로.
     [VERIFY] env(obs_float32=True) 이미지 스케일을 로봇에서 확인:
@@ -250,6 +263,11 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
                 while True:
                     # ── 에피소드 시작 전 head hot-swap ──
                     weight_version = maybe_hotswap_residual_head(mailbox, fast_policy, weight_version, device)
+                    head_ready = _fast_head_ready(fast_policy)
+                    if not head_ready:
+                        print("[Actor] 학습된 residual head 아직 없음(normalizer 비어있음) → "
+                              "이번 에피소드는 slow-only 실행 + 교정 데이터만 수집. "
+                              f"(a=교정 → s=전송, {C.MIN_EPISODES_BEFORE_TRAIN}개 이상 쌓이면 learner 학습→발행)")
 
                     start_delay = 1.0
                     eval_t_start = time.time() + start_delay
@@ -299,19 +317,22 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
                         slow_pose9 = np.asarray(slow_abs[:9], dtype=np.float64)
                         slow_hand = np.asarray(slow_abs[9:], dtype=np.float64) if action_dim > 9 else None
 
-                        # ── fast residual ──
-                        base_action_rel = get_relative_action_from_abs(action=slow_pose9[None], env_obs=obs)[0]
-                        fast_obs_np = _build_fixed_context_fast_obs(
-                            context_obs_dict_np=fast_ctx,
-                            latest_obs_dict_np=_latest_obs_only(
-                                _get_policy_obs_dict(obs, fast_shape_meta, fast_obs_pose_repr), fast_shape_meta),
-                            base_action_rel=base_action_rel,
-                            base_action_history=base_hist, wrench_history=wr_hist, low_dim_history=ld_hist,
-                            fast_policy=fast_policy, max_steps=fast_n_obs)
-                        with torch.no_grad():
-                            residual6 = fast_policy.predict_action(
-                                _to_torch_obs(fast_obs_np, device))["action"][0, 0].cpu().numpy()
-                        residual6 = cap_residual(residual6)
+                        # ── fast residual (학습된 head 있을 때만; 없으면 slow-only=0) ──
+                        if head_ready:
+                            base_action_rel = get_relative_action_from_abs(action=slow_pose9[None], env_obs=obs)[0]
+                            fast_obs_np = _build_fixed_context_fast_obs(
+                                context_obs_dict_np=fast_ctx,
+                                latest_obs_dict_np=_latest_obs_only(
+                                    _get_policy_obs_dict(obs, fast_shape_meta, fast_obs_pose_repr), fast_shape_meta),
+                                base_action_rel=base_action_rel,
+                                base_action_history=base_hist, wrench_history=wr_hist, low_dim_history=ld_hist,
+                                fast_policy=fast_policy, max_steps=fast_n_obs)
+                            with torch.no_grad():
+                                residual6 = fast_policy.predict_action(
+                                    _to_torch_obs(fast_obs_np, device))["action"][0, 0].cpu().numpy()
+                            residual6 = cap_residual(residual6)
+                        else:
+                            residual6 = np.zeros(6, dtype=np.float64)
                         final_pose9 = apply_residual_action_to_pose9(slow_pose9, residual6)
                         if slow_hand is not None:
                             final_action = np.concatenate([final_pose9, slow_hand]).astype(np.float64)
