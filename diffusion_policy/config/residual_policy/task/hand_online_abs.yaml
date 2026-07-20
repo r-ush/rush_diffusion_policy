@@ -1,0 +1,79 @@
+# @package task
+# ABS hand 16D slow base (260710_insert_box_hand_wrench_abs), POSE-ONLY 6D residual.
+# hand_online.yaml 과 차이:
+#   * slow base 가 obs abs / action abs 이고 **wrench 를 안 쓴다**(force encoder 0).
+#     → shape_meta 에서 wrench_wrist_R 제거(있어도 head 가 무시하지만, 명시적으로 뺌).
+#   * slow_ckpt 는 260710 abs base. (run_hand 데이터가 이 base 로 수집됨 → slow_pred 일치)
+#   * residual/데이터 로직은 동일(same-row, action_target_shift=0). base 의 action_pose_repr=abs
+#     는 slow policy 객체에서 읽어 feeder/learner 가 알아서 처리(상대변환 없이 slow_pred 그대로).
+name: hand_online_abs
+
+# override at launch: task.slow_ckpt_path=/path/to/abs_base.ckpt
+slow_ckpt_path: /media/rush/00d3eaaf-732e-4a7f-8bd3-6fee68d14fe7/260710_insert_box_hand_wrench_abs/epoch=0600-train_loss=0.002.ckpt
+dataset_path: data/online_runs/run_hand_residual_abs/accumulated.hdf5
+
+image_shape: [3, 224, 224]
+low_dim_obs_horizon: 1
+img_obs_horizon: 1
+action_horizon: 1
+
+fast_force_encoder:
+  freeze_force_encoder: True
+  train_force_encoder: False
+  force_encoder_cfg: null
+
+shape_meta: &shape_meta
+  obs:
+    image0:
+      shape: [3, 224, 224]
+      type: rgb
+      horizon: ${task.img_obs_horizon}
+
+    robot_pose_R:
+      shape: [3]
+      type: low_dim
+      horizon: ${task.low_dim_obs_horizon}
+
+    robot_quat_R:
+      shape: [4]
+      type: low_dim
+      horizon: ${task.low_dim_obs_horizon}
+      rotation_rep: rotation_6d
+
+    hand_pose_R:
+      shape: [7]
+      type: low_dim
+      horizon: ${task.low_dim_obs_horizon}
+
+    base_action_rel:
+      shape: [9]
+      type: low_dim
+      horizon: ${task.low_dim_obs_horizon}
+
+  action:
+    shape: [6]
+    horizon: ${task.action_horizon}
+
+pose_repr: &pose_repr
+  obs_pose_repr: abs
+  action_pose_repr: residual_delta6_slow_pred_to_virtual
+
+env_runner:
+  _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
+
+dataset:
+  _target_: diffusion_policy.residual_policy.step_dataset.FastResidualContextStepDataset
+  shape_meta: *shape_meta
+  dataset_path: ${task.dataset_path}
+  temporal_lowdim_keys: all
+  base_action_key: base_action_rel
+  base_action_source_key: obs/slow_pred_action_rel
+  base_action_abs_source_key: obs/slow_pred_target_abs
+  action_key: obs/residual_delta6_slow_pred_to_virtual
+  action_target_shift: 0
+  base_action_target_shift: 0
+  n_obs_steps: ${dataset_obs_steps}
+  use_cache: False
+  seed: 42
+  val_ratio: 0.0
+  pose_repr: *pose_repr
