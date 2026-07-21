@@ -1,0 +1,89 @@
+# @package task
+# Hand 16D (pose9 + hand7) slow base, POSE-ONLY 6D residual, predicted-base
+# (slow-pred) variant for ONLINE residual DAgger — INTERVENTION (physical-push) 판.
+#
+# hand_online.yaml(teleop 판)과 동일하되 하나만 추가:
+#   * dataset.intervention_key: obs/is_intervention
+#     -> actor 가 페달('a'/'b' 토글)로 표시한 per-step 개입 플래그를 replay_buffer 에 실어,
+#        intervention learner 가 개입 프레임을 가중 샘플링한다(policy 입력은 아님).
+#   나머지(shape_meta/pose_repr/shift=0/relabel 정렬)는 teleop 판과 완전히 같다 — 개입형은
+#   제어 방식만 다르고(제어를 안 넘기고 사람이 팔을 민다) relabel 수식은 동일하기 때문이다.
+name: hand_intervention
+
+# override at launch: task.slow_ckpt_path=/path/to/hand_base.ckpt
+slow_ckpt_path: /media/rush/00d3eaaf-732e-4a7f-8bd3-6fee68d14fe7/260714_insert_box_hand_rel/epoch=0500-train_loss=0.002.ckpt
+# the learner sets this to the accumulated correction HDF5 at runtime
+dataset_path: data/online_runs/run_hand_intervention/accumulated.hdf5
+
+image_shape: [3, 224, 224]
+low_dim_obs_horizon: 1
+img_obs_horizon: 1
+action_horizon: 1
+
+fast_force_encoder:
+  freeze_force_encoder: True
+  train_force_encoder: False
+  force_encoder_cfg: null
+
+shape_meta: &shape_meta
+  obs:
+    image0:
+      shape: [3, 224, 224]
+      type: rgb
+      horizon: ${task.img_obs_horizon}
+
+    robot_pose_R:
+      shape: [3]
+      type: low_dim
+      horizon: ${task.low_dim_obs_horizon}
+
+    robot_quat_R:
+      shape: [4]
+      type: low_dim
+      horizon: ${task.low_dim_obs_horizon}
+      rotation_rep: rotation_6d
+
+    hand_pose_R:
+      shape: [7]
+      type: low_dim
+      horizon: ${task.low_dim_obs_horizon}
+
+    wrench_wrist_R:
+      shape: [6, 32]
+      type: wrench
+
+    base_action_rel:
+      shape: [9]
+      type: low_dim
+      horizon: ${task.low_dim_obs_horizon}
+
+  action:
+    shape: [6]
+    horizon: ${task.action_horizon}
+
+pose_repr: &pose_repr
+  obs_pose_repr: abs
+  action_pose_repr: residual_delta6_slow_pred_to_virtual
+
+env_runner:
+  _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner
+
+dataset:
+  _target_: diffusion_policy.residual_policy.step_dataset.FastResidualContextStepDataset
+  shape_meta: *shape_meta
+  dataset_path: ${task.dataset_path}
+  # low_dim(pose/quat/hand)도 per-step 시퀀스로 (include_step_low_dim=True 와 짝).
+  temporal_lowdim_keys: all
+  base_action_key: base_action_rel
+  base_action_source_key: obs/slow_pred_action_rel
+  base_action_abs_source_key: obs/slow_pred_target_abs
+  action_key: obs/residual_delta6_slow_pred_to_virtual
+  # 개입형 전용: per-step 0/1 개입 플래그(가중 샘플링용). 없으면 teleop 판과 동일 동작.
+  intervention_key: obs/is_intervention
+  action_target_shift: 0
+  base_action_target_shift: 0
+  n_obs_steps: ${dataset_obs_steps}
+  use_cache: False
+  seed: 42
+  val_ratio: 0.0
+  pose_repr: *pose_repr

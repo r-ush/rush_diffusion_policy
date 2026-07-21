@@ -62,6 +62,7 @@ class FastResidualContextStepDataset(BaseImageDataset):
             val_ratio=0.0,
             pose_repr: dict = {},
             temporal_lowdim_keys=None,
+            intervention_key=None,
         ):
         if use_cache:
             raise NotImplementedError("FastResidualContextStepDataset keeps conversion in memory; use_cache is not needed.")
@@ -76,6 +77,7 @@ class FastResidualContextStepDataset(BaseImageDataset):
             action_key=action_key,
             action_target_shift=action_target_shift,
             base_action_target_shift=base_action_target_shift,
+            intervention_key=intervention_key,
         )
 
         rgb_keys = []
@@ -113,6 +115,7 @@ class FastResidualContextStepDataset(BaseImageDataset):
         self.lowdim_keys = lowdim_keys
         self.wrench_keys = wrench_keys
         self.base_action_key = base_action_key
+        self.intervention_key = intervention_key
         self.action_target_shift = int(action_target_shift)
         self.n_obs_steps = n_obs_steps
         self.train_mask = train_mask
@@ -371,7 +374,8 @@ def _convert_step_hdf5_to_replay(
         base_action_abs_source_key,
         action_key,
         action_target_shift=0,
-        base_action_target_shift=None):
+        base_action_target_shift=None,
+        intervention_key=None):
     root = zarr.group(store=store)
     replay_buffer = ReplayBuffer.create_from_group(root)
     obs_meta = shape_meta["obs"]
@@ -398,6 +402,13 @@ def _convert_step_hdf5_to_replay(
                 if key != base_action_key:
                     episode[key] = _read_demo_dataset(demo, key)
             action = _read_demo_dataset(demo, action_key)
+
+            # (선택) per-step 개입 플래그. obs 처럼 뒤에서 shift 만큼 잘린다(정렬 유지).
+            # replay_buffer 에만 실려 learner 의 가중 샘플러가 읽는다(policy 입력 아님).
+            if intervention_key is not None:
+                isint = np.asarray(
+                    _read_demo_dataset(demo, intervention_key), dtype=np.float32)
+                episode["is_intervention"] = isint.reshape(isint.shape[0], -1)
 
             if base_action_target_shift > 0:
                 if base_action_abs_source_key is None:

@@ -110,7 +110,7 @@ def main():
     env["PYTHONPATH"] = ROOT + os.pathsep + env.get("PYTHONPATH", "")
     print("[demo] learner 프로세스 시작 (로딩에 10~20초 걸릴 수 있음)...")
     learner_proc = subprocess.Popen(
-        [sys.executable, os.path.join(ROOT, "online_learning/online_learner.py")],
+        [sys.executable, os.path.join(ROOT, "online_learning/finetune_teleop_learner.py")],
         env=env, stdout=learner_log, stderr=subprocess.STDOUT)
 
     mailbox = FileMailbox(WORKDIR)

@@ -41,11 +41,11 @@ DualarmRealEnv, wrench obs)를 따르고, 온라인 훅 + 페달 servo 핸드오
 실행:
   source ~/dualarm_ws/install/setup.bash
   # 터미널1: python online_learning/servo_rightarm_imp_online.py
-  # 터미널2: python online_learning/online_learner.py -i <box_hand_ckpt>
+  # 터미널2: python online_learning/finetune_teleop_learner.py -i <box_hand_ckpt>
   # 터미널3(손 쓸 때, 항상 켜둠): (manus_ws)$ python manus_to_aidin_rush.py --gate-teleop
   # 터미널4:
   ONLINE_WORKDIR=data/online_runs/run_hand \
-  python online_learning/online_actor_env_runner.py \
+  python online_learning/finetune_teleop_actor_env_runner.py \
       -i data/outputs/260710_insert_box_hand_wrench_abs/epoch=0900-train_loss=0.001.ckpt \
       --steps_per_inference 12 --frequency 10 --num_inference_steps 12 --use_hand
   # (learner/actor 모두 같은 ONLINE_WORKDIR·같은 16D ckpt, 손 실행은 새 workdir로 시작)

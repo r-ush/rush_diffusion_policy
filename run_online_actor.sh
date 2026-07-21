@@ -18,5 +18,5 @@ echo "ONLINE_BASE_CKPT=$ONLINE_BASE_CKPT" | tee -a "$LOG"
 
 # -u / PYTHONUNBUFFERED: Python print가 tee 파이프에서 버퍼에 갇히지 않게 (진행 메시지 즉시 표시)
 export PYTHONUNBUFFERED=1
-python -u online_learning/online_actor_env_runner.py \
+python -u online_learning/finetune_teleop_actor_env_runner.py \
     --num_inference_steps 60 2>&1 | tee -a "$LOG"

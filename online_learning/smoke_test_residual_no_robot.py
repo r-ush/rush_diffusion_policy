@@ -70,7 +70,7 @@ def main():
     assert os.path.exists(C.SLOW_CKPT), f"slow ckpt 없음: {C.SLOW_CKPT} (SSD 마운트 확인)"
 
     # ── A. learner 인스턴스화 (slow ckpt 로 residual 정책 build) ───────────────
-    from online_learning.residual_online_learner import ResidualOnlineLearner
+    from online_learning.residual_teleop_learner import ResidualOnlineLearner
     learner = ResidualOnlineLearner()
     print("[smoke] ✅ A: residual 정책이 slow ckpt 로 인스턴스화됨")
 

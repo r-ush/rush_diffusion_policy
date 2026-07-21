@@ -2,7 +2,7 @@
 """
 온라인 residual DAgger Actor (박스삽입, 오른팔+손, wrench) — slow+fast residual 판.
 
-online_actor_env_runner.py(full-finetune 판)의 검증된 제어/교정 골격을 따르되,
+finetune_teleop_actor_env_runner.py(full-finetune 판)의 검증된 제어/교정 골격을 따르되,
 추론을 **frozen slow chunk + per-step fast residual** 로 바꾸고, hot-swap 을 **head-only**
 로, 전송을 **residual 포맷** 으로 바꾼 것. 추론 조립은 검증된
 diffusion_policy/residual_policy/eval_real_robot_rightarm_insert_plug.py 의 헬퍼를 재사용.
@@ -25,7 +25,7 @@ diffusion_policy/residual_policy/eval_real_robot_rightarm_insert_plug.py 의 헬
   RESIDUAL_ONLINE_WORKDIR=data/online_runs/run_hand_residual \
   RESIDUAL_SLOW_CKPT=/media/rush/.../260714_insert_box_hand_rel/epoch=0500-train_loss=0.002.ckpt \
   /home/rush/anaconda3/envs/bae_robodiff/bin/python \
-    online_learning/residual_online_actor_env_runner.py --use_hand \
+    online_learning/residual_teleop_actor_env_runner.py --use_hand \
       --steps_per_inference 6 --frequency 10 --num_inference_steps 12
 """
 # huggingface_hub 버전 충돌 회피 (다른 import보다 먼저) — online actor 와 동일
@@ -70,8 +70,8 @@ from diffusion_policy.residual_policy.eval_real_robot_rightarm_insert_plug impor
     _build_fixed_context_fast_obs,
     _to_torch_obs,
 )
-# 교정/키 입력 헬퍼 재사용 (online actor)
-from online_learning.online_actor_env_runner import (
+# 교정/키 입력 헬퍼 재사용 (finetune teleop actor)
+from online_learning.finetune_teleop_actor_env_runner import (
     TeleopControlPub,
     KeyReader,
     _validate_hand_mode,

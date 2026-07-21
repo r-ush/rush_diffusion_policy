@@ -5,7 +5,7 @@ set -euo pipefail
 export RESIDUAL_SLOW_CKPT=/home/vision/diffusion-policy/data/outputs/260710_insert_box_hand_wrench_abs/epoch=0500-train_loss=0.003.ckpt
 export RESIDUAL_ONLINE_WORKDIR=/home/vision/rush_diffusion_policy/data/online_runs/run_hand_residual_abs
 cd /home/vision/rush_diffusion_policy
-exec /home/vision/venv_diffusion/bin/python online_learning/residual_online_actor_env_runner.py \
+exec /home/vision/venv_diffusion/bin/python online_learning/residual_teleop_actor_env_runner.py \
   -i /home/vision/diffusion-policy/data/outputs/260710_insert_box_hand_wrench_abs/epoch=0500-train_loss=0.003.ckpt \
   --use_hand --steps_per_inference 6 --frequency 10 --num_inference_steps 12 \
   --max_duration 86400

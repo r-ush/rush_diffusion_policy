@@ -6,7 +6,7 @@
   warm-continue 학습(가중치 발행) → 다 돌면 held-out 소스(run_hand2)로 head 예측 vs
   GT 교정(residual) 비교 → report(JSON) + plots(PNG).
 
-replay_feed_episodes.py(feeder) + residual_online_learner.py + verify_residual_on_data.py 의
+replay_feed_episodes.py(feeder) + residual_teleop_learner.py + verify_residual_on_data.py 의
 로직을 in-process 로 묶은 오케스트레이터(별도 터미널 3개 대신 한 번에).
 
 실행(백그라운드 권장):
@@ -66,7 +66,7 @@ def main():
     C.MAX_SAMPLES_PER_EPOCH = args.max_samples_per_epoch
     C.MIN_EPISODES_BEFORE_TRAIN = 2
 
-    from online_learning.residual_online_learner import ResidualOnlineLearner
+    from online_learning.residual_teleop_learner import ResidualOnlineLearner
     learner = ResidualOnlineLearner()
     slow = learner.policy.slow_policy
     slow.num_inference_steps = args.num_inference_steps

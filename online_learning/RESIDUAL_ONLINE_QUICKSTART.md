@@ -29,7 +29,7 @@ cd /home/vision/rush_diffusion_policy && /home/vision/venv_diffusion/bin/python 
 
 ### 터미널 2 — learner (head warm-continue 학습 + 발행)
 ```bash
-cd /home/vision/rush_diffusion_policy && RESIDUAL_SLOW_CKPT=/home/vision/diffusion-policy/data/outputs/260714_insert_box_hand_rel/epoch=0500-train_loss=0.002.ckpt RESIDUAL_ONLINE_WORKDIR=/home/vision/rush_diffusion_policy/data/online_runs/run_hand_residual /home/vision/venv_diffusion/bin/python online_learning/residual_online_learner.py
+cd /home/vision/rush_diffusion_policy && RESIDUAL_SLOW_CKPT=/home/vision/diffusion-policy/data/outputs/260714_insert_box_hand_rel/epoch=0500-train_loss=0.002.ckpt RESIDUAL_ONLINE_WORKDIR=/home/vision/rush_diffusion_policy/data/online_runs/run_hand_residual /home/vision/venv_diffusion/bin/python online_learning/residual_teleop_learner.py
 ```
 
 ### 터미널 3 — manus (손 교정, 교정 중에만 발행). 평소 ROS2 python
@@ -39,7 +39,7 @@ cd /home/vision/manus_ws/src/ROS2 && python manus_to_aidin_rush.py --gate-teleop
 
 ### 터미널 4 — actor (slow+fast 추론 + 교정 수집 + hot-swap + 전송)
 ```bash
-cd /home/vision/rush_diffusion_policy && RESIDUAL_SLOW_CKPT=/home/vision/diffusion-policy/data/outputs/260714_insert_box_hand_rel/epoch=0500-train_loss=0.002.ckpt RESIDUAL_ONLINE_WORKDIR=/home/vision/rush_diffusion_policy/data/online_runs/run_hand_residual /home/vision/venv_diffusion/bin/python online_learning/residual_online_actor_env_runner.py -i /home/vision/diffusion-policy/data/outputs/260714_insert_box_hand_rel/epoch=0500-train_loss=0.002.ckpt --use_hand --steps_per_inference 6 --frequency 10 --num_inference_steps 12
+cd /home/vision/rush_diffusion_policy && RESIDUAL_SLOW_CKPT=/home/vision/diffusion-policy/data/outputs/260714_insert_box_hand_rel/epoch=0500-train_loss=0.002.ckpt RESIDUAL_ONLINE_WORKDIR=/home/vision/rush_diffusion_policy/data/online_runs/run_hand_residual /home/vision/venv_diffusion/bin/python online_learning/residual_teleop_actor_env_runner.py -i /home/vision/diffusion-policy/data/outputs/260714_insert_box_hand_rel/epoch=0500-train_loss=0.002.ckpt --use_hand --steps_per_inference 6 --frequency 10 --num_inference_steps 12
 ```
 
 ## actor 키 (터미널 4에 포커스)

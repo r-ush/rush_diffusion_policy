@@ -1,9 +1,9 @@
 # Residual-Online DAgger — 로봇 실행 런북 (다음에 완성/실행할 때 보는 문서)
 
 > 이 문서는 **로봇 앞에서** residual-online DAgger를 완성·실행할 때의 체크리스트다.
-> 설계/배경은 `RESIDUAL_ONLINE_HANDOFF.md`, 학습 코어(검증됨)는 `residual_online_learner.py`.
+> 설계/배경은 `RESIDUAL_ONLINE_HANDOFF.md`, 학습 코어(검증됨)는 `residual_teleop_learner.py`.
 > 현재 상태: **learner 코어 = 완성·검증됨(로봇 없이 통과). actor = 초안 작성됨
-> (`residual_online_actor_env_runner.py`), 단 하드웨어(rclpy/realsense/servo) 없이는 실행
+> (`residual_teleop_actor_env_runner.py`), 단 하드웨어(rclpy/realsense/servo) 없이는 실행
 > 검증 불가 → 로봇에서 [VERIFY] 지점만 실측 확인·튜닝하면 됨.**
 > 즉 로봇에서 할 일은 (1) actor [VERIFY] 확인 → (2) 멀티터미널 실행 → (3) 교정 루프 → (4) 검증.
 
@@ -34,7 +34,7 @@ $PY online_learning/smoke_test_residual_no_robot.py   # "🎉 전부 통과" 떠
 
 ## 1. Actor — 초안 작성됨, 로봇에서 [VERIFY] 확인만
 
-`online_learning/residual_online_actor_env_runner.py` 가 이미 작성돼 있다(one-step-per-tick,
+`online_learning/residual_teleop_actor_env_runner.py` 가 이미 작성돼 있다(one-step-per-tick,
 head hot-swap, slow_pred 로깅, residual 전송, Δ캡, 교정 핸드오프 포함). `py_compile` 통과.
 **로봇에서 아래 [VERIFY] 만 실측 확인·튜닝하면 바로 돈다:**
 
@@ -57,10 +57,10 @@ head hot-swap, slow_pred 로깅, residual 전송, Δ캡, 교정 핸드오프 포
   - slow가 chunk 예측 → per-step fast Δ refine → `apply_residual_action_to_pose9` → 1스텝 실행.
   - 실행 직전 `slow_abs_target`(pose9)가 **그 스텝의 base**. (파일 내 line ~776, `final_abs_action` 계산 직전)
   - 선택: `--slow_use_pigdm` realtime chunking(떨림 완화, 나중에).
-- 온라인/교정 골격: `online_learning/online_actor_env_runner.py`
+- 온라인/교정 골격: `online_learning/finetune_teleop_actor_env_runner.py`
   - a/b/c servo 핸드오프, teleop correction 기록, `KeyReader`, `FileMailbox`, 에피소드 전송, `use_hand`.
 
-권장: `online_learning/residual_online_actor_env_runner.py` 를 새로 만들되 위 둘에서 함수 복붙.
+권장: `online_learning/residual_teleop_actor_env_runner.py` 를 새로 만들되 위 둘에서 함수 복붙.
 
 ### 얹을 온라인 훅 3개 (정확히 이것만 추가)
 
@@ -136,9 +136,9 @@ export RESIDUAL_ONLINE_WORKDIR=data/online_runs/run_hand_residual
 | 터미널 | 명령 | 역할 |
 |--------|------|------|
 | 1 (servo) | `$PY online_learning/servo_rightarm_imp_online.py` | 팔 servo(VR Vive 트래커 + `/teleop_control=1`) |
-| 2 (learner) | `$PY online_learning/residual_online_learner.py` | head warm-continue 학습 + 발행 |
+| 2 (learner) | `$PY online_learning/residual_teleop_learner.py` | head warm-continue 학습 + 발행 |
 | 3 (manus) | `(manus_ws)$ python manus_to_aidin_rush.py --gate-teleop -r --relative` | 손 교정(교정 중에만 발행) |
-| 4 (actor) | `$PY online_learning/residual_online_actor_env_runner.py -i "$RESIDUAL_SLOW_CKPT" --use_hand --steps_per_inference 6 --frequency 10 --num_inference_steps 12` | slow+fast 추론 + 교정 수집 + hot-swap + 전송 |
+| 4 (actor) | `$PY online_learning/residual_teleop_actor_env_runner.py -i "$RESIDUAL_SLOW_CKPT" --use_hand --steps_per_inference 6 --frequency 10 --num_inference_steps 12` | slow+fast 추론 + 교정 수집 + hot-swap + 전송 |
 
 actor 키: `a`=servo 핸드오프(교정 시작) · `b`=actor 복귀 · `c`=홈 · `s`=유지+전송 · `d`=폐기 · `q`=종료.
 (actor 터미널에 포커스 두고 페달/키 입력.)

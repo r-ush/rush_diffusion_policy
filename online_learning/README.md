@@ -15,8 +15,8 @@ CR-DAgger와의 차이:
 |------|------|
 | `config_online.py` | actor·learner 공유 설정 (경로, LR, epoch, mailbox 등) |
 | `mailbox.py` | 파일시스템 기반 통신 (robotmq 대체). cross-machine은 ZMQ로 교체 |
-| `online_learner.py` | Learner 프로세스 (에피소드 수신 → fine-tune → 가중치 발행) |
-| `online_actor_env_runner.py` | Actor (실로봇): inference + correction 수집 + hot-swap + 전송 |
+| `finetune_teleop_learner.py` | Learner 프로세스 (에피소드 수신 → fine-tune → 가중치 발행) |
+| `finetune_teleop_actor_env_runner.py` | Actor (실로봇): inference + correction 수집 + hot-swap + 전송 |
 | `relabel_utils.py` | replay_buffer 에피소드 → achieved-pose relabel HDF5 |
 | `smoke_test_no_robot.py` | 로봇 없이 루프 전체 검증 (통과 확인됨) |
 
@@ -42,9 +42,9 @@ python online_learning/smoke_test_no_robot.py
 
 # 실제 온라인 운영:
 # 터미널 1 (GPU):
-python online_learning/online_learner.py
+python online_learning/finetune_teleop_learner.py
 # 터미널 2 (로봇 PC):
-python online_learning/online_actor_env_runner.py
+python online_learning/finetune_teleop_actor_env_runner.py
 ```
 actor OpenCV 창을 클릭해 포커스를 준 뒤 `C`(correction 토글, 페달 매핑 가능) / `S`(유지) / `D`(폐기).
 
@@ -58,7 +58,7 @@ actor OpenCV 창을 클릭해 포커스를 준 뒤 `C`(correction 토글, 페달
 ## 검증 상태
 - ✅ `smoke_test_no_robot.py` : 실제 `epoch=0700` 체크포인트로 에피소드 전송 → 학습
   (loss 감소) → v1 발행 → hot-swap(state_dict 완전 일치) → predict_action 까지 통과.
-- ⚠️ `online_actor_env_runner.py` : 실제 로봇/카메라(LeftarmRealEnvImp)가 있어야 실행
+- ⚠️ `finetune_teleop_actor_env_runner.py` : 실제 로봇/카메라(LeftarmRealEnvImp)가 있어야 실행
   가능 → 하드웨어 없이는 미검증. 제어 루프는 검증된 `rush_eval_real_robot_imp.py`와
   동일하고, 추가한 훅(hot-swap, 전송)만 얹었다. 첫 실행 시 `stage` 기록·전송·swap 로그를
   꼭 확인할 것.

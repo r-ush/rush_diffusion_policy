@@ -55,7 +55,7 @@ def main():
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
-    from online_learning.residual_online_learner import ResidualOnlineLearner
+    from online_learning.residual_teleop_learner import ResidualOnlineLearner
     learner = ResidualOnlineLearner()
     slow = learner.policy.slow_policy
     slow.num_inference_steps = args.num_inference_steps

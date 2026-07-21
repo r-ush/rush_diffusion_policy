@@ -8,10 +8,15 @@ full-finetune 경로의 online_learning/relabel_utils.py 대응. 차이:
     residual_delta6[t] = delta6_from_base_to_target(slow_pred_target_abs[t], virtual[t]).
   * 손(hand)은 residual 대상이 아니라 obs 입력일 뿐(v1은 pose-only 6D). 손 명령은 base 그대로.
 
+개입(intervention) 판: episode 에 'is_intervention'(per-step 0/1) 이 있으면 그대로 통과시켜
+  data/<demo>/obs/is_intervention 로 기록한다. residual_intervention learner 가 이 플래그로
+  개입 프레임을 가중 샘플링한다(teleop 판은 이 키가 없어 무영향).
+
 출력 HDF5 구조(FastResidualContextStepDataset + task/hand_online.yaml 이 읽는 포맷):
   data/<demo_name>/obs/{image0, robot_pose_R, robot_quat_R, hand_pose_R, wrench_wrist_R,
                         slow_pred_target_abs, slow_pred_action_rel,
-                        residual_delta6_slow_pred_to_virtual}
+                        residual_delta6_slow_pred_to_virtual,
+                        [is_intervention]}  # 개입 판에서만
 
 길이: 마지막 스텝은 "한 스텝 뒤 achieved"가 없어 버린다(T -> T-1). 그래서
 hand_online.yaml 은 action_target_shift=0(이 파일이 이미 정렬을 끝냄).
@@ -94,6 +99,11 @@ def build_residual_demo(episode: dict):
     demo["slow_pred_action_rel"] = slow_pred_action_rel.astype(np.float32)
     demo["virtual_target_abs"] = virtual_target_abs.astype(np.float32)
     demo["residual_delta6_slow_pred_to_virtual"] = residual_delta6
+
+    # (선택) 개입 플래그: per-step 0/1 -> (n,1). 마지막 스텝은 residual 과 동일하게 버림.
+    if "is_intervention" in episode:
+        isint = np.asarray(episode["is_intervention"], dtype=np.float32)
+        demo["is_intervention"] = isint.reshape(isint.shape[0], -1)[:n]
     return demo
 
 

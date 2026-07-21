@@ -60,7 +60,7 @@ def main():
     print(f"[smoke] workdir = {C.ONLINE_WORKDIR}")
 
     # learner를 import (config를 먼저 바꾼 뒤 import 되도록 지연 import)
-    from online_learning.online_learner import OnlineLearner
+    from online_learning.finetune_teleop_learner import OnlineLearner
     from online_learning.mailbox import FileMailbox
 
     learner = OnlineLearner()
