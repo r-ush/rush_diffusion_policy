@@ -235,20 +235,31 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
 
             mode = 'policy'
 
+            # 핸드오프 정착 지연: pause/resume 은 큐 기반이라 컨트롤러가 실제로 발행을
+            # 멈추기까지 최대 한 제어 사이클 걸린다. servo/manus 로 넘기기 전에 이만큼
+            # 기다려야 같은 토픽(task_space_command / hand joint_state_command)에 컨트롤러와
+            # servo/manus 가 동시에 쏘는 창이 사라진다(개입 순간 로봇 튐 방지).
+            HANDOFF_SETTLE_S = 0.15
+
             def process_key(key):
                 nonlocal mode
                 if key is None:
                     return None
                 if key in ('a', 'A'):
                     if mode != 'teleop':
-                        env.pause_robot(); teleop.publish(1); mode = 'teleop'
+                        # 먼저 컨트롤러 발행 중단 → 정착 → 그 다음에 servo/manus 인계
+                        env.pause_robot(); time.sleep(HANDOFF_SETTLE_S)
+                        teleop.publish(1); mode = 'teleop'
                         print("[Actor] 핸드오프 → servo (correction 기록)")
                 elif key in ('b', 'B'):
                     if mode != 'policy':
-                        teleop.publish(4); env.resume_robot(); mode = 'policy'
+                        # 먼저 servo/manus 중단 → 정착 → 그 다음에 컨트롤러 재개(현재 pose 재동기화)
+                        teleop.publish(4); time.sleep(HANDOFF_SETTLE_S)
+                        env.resume_robot(); mode = 'policy'
                         print("[Actor] 복귀 → 정책 제어")
                 elif key in ('c', 'C'):
-                    env.pause_robot(); teleop.publish(2); mode = 'teleop'
+                    env.pause_robot(); time.sleep(HANDOFF_SETTLE_S)
+                    teleop.publish(2); mode = 'teleop'
                     print("[Actor] 홈복귀(servo). b로 복귀.")
                 elif key in ('s', 'S'):
                     return 'keep'

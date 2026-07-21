@@ -1,8 +1,9 @@
 # @package task
 # ABS hand 16D slow base (260710_insert_box_hand_wrench_abs), POSE-ONLY 6D residual.
 # hand_online.yaml 과 차이:
-#   * slow base 가 obs abs / action abs 이고 **wrench 를 안 쓴다**(force encoder 0).
-#     → shape_meta 에서 wrench_wrist_R 제거(있어도 head 가 무시하지만, 명시적으로 뺌).
+#   * slow base 가 obs abs / action abs 이다. base 는 wrench 인코더 정책이라
+#     predict_action 이 wrench_wrist_R 을 요구 → shape_meta 에 반드시 포함해야 함
+#     (residual head 는 include_initial_wrench=False + force_encoder_cfg=null 로 무시).
 #   * slow_ckpt 는 260710 abs base. (run_hand 데이터가 이 base 로 수집됨 → slow_pred 일치)
 #   * residual/데이터 로직은 동일(same-row, action_target_shift=0). base 의 action_pose_repr=abs
 #     는 slow policy 객체에서 읽어 feeder/learner 가 알아서 처리(상대변환 없이 slow_pred 그대로).
@@ -44,6 +45,10 @@ shape_meta: &shape_meta
       shape: [7]
       type: low_dim
       horizon: ${task.low_dim_obs_horizon}
+
+    wrench_wrist_R:
+      shape: [6, 32]
+      type: wrench
 
     base_action_rel:
       shape: [9]
