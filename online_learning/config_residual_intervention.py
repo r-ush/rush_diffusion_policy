@@ -49,6 +49,9 @@ FIRST_EPOCHS = int(os.environ.get("RESIDUAL_INTERVENTION_FIRST_EPOCHS", 120))
 BATCH_SIZE = int(os.environ.get("RESIDUAL_INTERVENTION_BATCH_SIZE", 64))
 NUM_WORKERS = int(os.environ.get("RESIDUAL_INTERVENTION_NUM_WORKERS", 0))
 MIN_EPISODES_BEFORE_TRAIN = int(os.environ.get("RESIDUAL_INTERVENTION_MIN_EPISODES", 2))
+# ── 대배치 DAgger 게이팅 (원본 CR-DAgger num_episodes_before_first_training / update-every-N) ──
+FIRST_TRAIN_EPISODES = int(os.environ.get("RESIDUAL_INTERVENTION_FIRST_TRAIN_EPISODES", 50))
+UPDATE_EVERY_N_EPISODES = int(os.environ.get("RESIDUAL_INTERVENTION_UPDATE_EVERY_N", 10))
 # epoch 당 샘플 수 상한(0=len(dataset) 만큼 한 pass). 가중 샘플러의 num_samples 로 쓰인다.
 MAX_SAMPLES_PER_EPOCH = int(os.environ.get("RESIDUAL_INTERVENTION_MAX_SAMPLES_PER_EPOCH", 0))
 DEVICE = os.environ.get("RESIDUAL_INTERVENTION_DEVICE", "cuda:0")
@@ -57,6 +60,11 @@ DEVICE = os.environ.get("RESIDUAL_INTERVENTION_DEVICE", "cuda:0")
 # 안 민 프레임(residual≈0 negative)도 함께 학습해 nominal 상태 과도교정을 막되,
 # 실제 교정 신호가 있는 개입 프레임을 이 배수만큼 자주 뽑는다.
 INTERVENTION_SAMPLE_WEIGHT = float(os.environ.get("INTERVENTION_SAMPLE_WEIGHT", 5.0))
+
+# 개입 '시작 구간' 집중 샘플링(원본 CR-DAgger dense-after). 각 개입 onset 이후 이 스텝 수만
+# 가중해 뽑는다. 논문: "dense after start"(100%) > around(75) > uniform(70); 시작 '직전'
+# (실패 징후=negative) 은 가중 안 함. 0 이면 개입 전체 균등 가중(구버전 동작).
+CORRECTION_START_HORIZON = int(os.environ.get("INTERVENTION_CORRECTION_START_HORIZON", 8))
 
 # residual head EMA (작아서 이득 적지만 옵션 유지)
 USE_EMA = os.environ.get("RESIDUAL_INTERVENTION_USE_EMA", "1") == "1"

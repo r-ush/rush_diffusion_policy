@@ -39,6 +39,11 @@ FIRST_EPOCHS = int(os.environ.get("RESIDUAL_FIRST_EPOCHS", 120))
 BATCH_SIZE = int(os.environ.get("RESIDUAL_BATCH_SIZE", 64))
 NUM_WORKERS = int(os.environ.get("RESIDUAL_NUM_WORKERS", 0))
 MIN_EPISODES_BEFORE_TRAIN = int(os.environ.get("RESIDUAL_MIN_EPISODES", 2))
+# ── 대배치 DAgger 게이팅 (원본 CR-DAgger num_episodes_before_first_training / update-every-N) ──
+# 논문: 소배치(잦은 업데이트)는 catastrophic forgetting 으로 불안정. 충분히 모아 첫 학습,
+# 이후 N 개마다 갱신·발행. (batch=50→100% vs batch=10→0%)
+FIRST_TRAIN_EPISODES = int(os.environ.get("RESIDUAL_FIRST_TRAIN_EPISODES", 50))
+UPDATE_EVERY_N_EPISODES = int(os.environ.get("RESIDUAL_UPDATE_EVERY_N", 10))
 # epoch 당 샘플 상한(0=전체). 교정 데이터에 correction 가중이 없으므로 단순 상한.
 MAX_SAMPLES_PER_EPOCH = int(os.environ.get("RESIDUAL_MAX_SAMPLES_PER_EPOCH", 0))
 DEVICE = os.environ.get("RESIDUAL_DEVICE", "cuda:0")

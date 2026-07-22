@@ -37,19 +37,33 @@ from online_learning import config_residual_intervention as IC
 from online_learning.residual_teleop_learner import ResidualOnlineLearner
 
 
-def intervention_sample_weights(indices, is_intervention, weight):
-    """각 sample 윈도우의 "현재 스텝"(pad_after=0 이므로 buf_end-1)이 개입이면 weight, 아니면 1.
+def intervention_sample_weights(indices, is_intervention, weight, start_horizon=0):
+    """각 sample 윈도우의 "현재 스텝"(pad_after=0 이므로 buf_end-1)이 '가중 대상'이면 weight, 아니면 1.
 
-    indices          : dataset.sampler.indices (각 원소 (buf_start, buf_end, samp_start, samp_end))
-    is_intervention  : replay_buffer per-step 개입 플래그(모든 에피소드 concat), (총스텝,) 또는 (총스텝,1)
-    weight           : 개입 프레임 가중치(>1)
-    반환             : (len(indices),) float64 가중치 (정책 없이도 계산 가능 = 테스트용).
+    start_horizon > 0 : 원본 CR-DAgger 'dense-after' — 각 개입 span 의 onset(시작) 이후
+                        start_horizon 스텝(반응 시작 구간)만 가중. 시작 '직전'(실패 징후)은
+                        가중하지 않음(negative 로 남겨 과도교정 방지).
+    start_horizon <= 0: 개입 span 전체 균등 가중(구버전 동작).
+
+    indices          : dataset.sampler.indices ((buf_start, buf_end, samp_start, samp_end))
+    is_intervention  : replay_buffer per-step 개입 플래그(모든 에피소드 concat)
+    weight           : 가중치(>1)
+    반환             : (len(indices),) float64 (정책 없이도 계산 가능 = 테스트용).
     """
-    isint = np.asarray(is_intervention, dtype=np.float64).reshape(-1)
+    isint = np.asarray(is_intervention, dtype=np.float64).reshape(-1) > 0.5
+    if start_horizon and int(start_horizon) > 0:
+        prev = np.concatenate([[False], isint[:-1]])
+        onsets = np.where(isint & ~prev)[0]              # 개입 시작(rising edge)
+        target = np.zeros_like(isint)
+        for o in onsets:
+            target[o:o + int(start_horizon)] = True      # onset 이후 start_horizon 스텝
+        target &= isint                                  # span 내부로 제한(뒤 nominal 로 안 샘)
+    else:
+        target = isint
     w = np.ones(len(indices), dtype=np.float64)
     for i, idx in enumerate(indices):
         step = int(idx[1]) - 1
-        if 0 <= step < isint.shape[0] and isint[step] > 0.5:
+        if 0 <= step < target.shape[0] and target[step]:
             w[i] = float(weight)
     return w
 
@@ -71,13 +85,15 @@ class ResidualInterventionLearner(ResidualOnlineLearner):
         isint = np.asarray(rb["is_intervention"]).reshape(-1)
         indices = dataset.sampler.indices  # 각 sample: (buf_start, buf_end, samp_start, samp_end)
         W = float(self.C.INTERVENTION_SAMPLE_WEIGHT)
-        weights = intervention_sample_weights(indices, isint, W)
+        H = int(getattr(self.C, "CORRECTION_START_HORIZON", 0))   # 0=개입전체, >0=시작구간 집중
+        weights = intervention_sample_weights(indices, isint, W, start_horizon=H)
 
         n_int = int((weights > 1.0).sum())
         n_steps_int = int((isint > 0.5).sum())
         n_samples = (self.C.MAX_SAMPLES_PER_EPOCH
                      if self.C.MAX_SAMPLES_PER_EPOCH > 0 else len(indices))
-        print(f"{self.tag} 가중 샘플러: 개입 윈도우 {n_int}/{len(indices)} "
+        mode = f"시작구간 집중 H={H}" if H > 0 else "개입 전체 균등"
+        print(f"{self.tag} 가중 샘플러({mode}): 가중 윈도우 {n_int}/{len(indices)} "
               f"(개입 스텝 {n_steps_int}/{isint.shape[0]}), W={W}, num_samples={n_samples}")
         sampler = WeightedRandomSampler(
             weights=torch.as_tensor(weights, dtype=torch.double),

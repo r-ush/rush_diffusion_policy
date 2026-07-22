@@ -196,11 +196,35 @@ class ResidualOnlineLearner:
         self.mailbox.publish_weights(payload)
         self.version += 1
 
+    # ── 대배치 DAgger 게이팅 (원본 CR-DAgger) ─────────────────────────────────────
+    def _should_train(self):
+        """원본 CR-DAgger 방식의 대배치 업데이트 게이팅.
+        · 첫 학습: FIRST_TRAIN_EPISODES 개 모일 때까지 대기(num_episodes_before_first_training).
+        · 이후: UPDATE_EVERY_N_EPISODES 개 새로 쌓일 때마다 갱신.
+        논문: 소배치 잦은 갱신은 불안정(catastrophic forgetting) → 모아서 갱신."""
+        first_n = int(getattr(self.C, "FIRST_TRAIN_EPISODES",
+                              getattr(self.C, "MIN_EPISODES_BEFORE_TRAIN", 1)))
+        every_n = max(1, int(getattr(self.C, "UPDATE_EVERY_N_EPISODES", 1)))
+        if not self._trained_once:
+            if self.num_demos >= first_n:
+                return True
+            print(f"{self.tag} 첫 학습 대기 (누적 {self.num_demos} < FIRST_TRAIN={first_n})")
+            return False
+        new_since = self.num_demos - self._demos_at_last_train
+        if new_since >= every_n:
+            return True
+        print(f"{self.tag} 업데이트 대기 (신규 {new_since} < EVERY_N={every_n})")
+        return False
+
     # ── 메인 루프 ──────────────────────────────────────────────────────────────
     def run(self):
         # 시작 시 (아직 학습 전) head 를 v0 로 발행해 actor 가 즉시 slow+random-residual 로 시작
         self._publish()
-        print(f"{self.tag} actor 의 에피소드를 대기합니다 ...")
+        self._trained_once = False
+        self._demos_at_last_train = 0
+        print(f"{self.tag} actor 의 에피소드를 대기합니다 (첫 학습까지 "
+              f"{getattr(self.C, 'FIRST_TRAIN_EPISODES', self.C.MIN_EPISODES_BEFORE_TRAIN)}개, "
+              f"이후 {getattr(self.C, 'UPDATE_EVERY_N_EPISODES', 1)}개마다) ...")
         while True:
             new_eps = self.mailbox.poll_new_episodes()
             if new_eps:
@@ -212,10 +236,10 @@ class ResidualOnlineLearner:
                         print(f"{self.tag} 에피소드 로드 실패 {ep}: {e}")
                     finally:
                         self.mailbox.mark_episode_done(ep)
-                if self.num_demos >= self.C.MIN_EPISODES_BEFORE_TRAIN:
+                if self._should_train():
                     self.train_round()
-                else:
-                    print(f"{self.tag} 학습 대기 (누적 {self.num_demos} < {self.C.MIN_EPISODES_BEFORE_TRAIN})")
+                    self._trained_once = True
+                    self._demos_at_last_train = self.num_demos
             else:
                 time.sleep(1.0)
 
