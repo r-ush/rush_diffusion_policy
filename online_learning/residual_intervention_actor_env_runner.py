@@ -82,6 +82,7 @@ from online_learning.finetune_teleop_actor_env_runner import (
     _validate_hand_mode,
 )
 from online_learning import config_residual_intervention as C
+from online_learning import lag_model
 from online_learning.mailbox import FileMailbox
 from online_learning.residual_relabel_utils import write_residual_episode_hdf5, RAW_OBS_KEYS
 
@@ -90,12 +91,20 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
 RIGHT_CAMERA_SERIALS = ['126122270712']   # 오른팔 realsense (박스삽입 eval과 동일)
 
 # relabel 로 보낼 프레임 키 = 원시 관측 + base 로그 + 개입 플래그
-EPISODE_KEYS = RAW_OBS_KEYS + ["slow_pred_target_abs", "is_intervention"]
+# residual_pred6 / residual_cmd6 : head 가 그 tick 에 낸 값. 라운드 2 이후 "head 가 얼마나
+#   기여했고 사람이 그 위에 얼마나 더 얹었나"를 사후에 분리하려면 반드시 기록해야 한다.
+#   head 가 없으면(1라운드) 0 으로 기록된다.
+EPISODE_KEYS = RAW_OBS_KEYS + ["slow_pred_target_abs", "is_intervention",
+                               "residual_pred6", "residual_cmd6"]
 
 
-def maybe_hotswap_residual_head(mailbox, fast_policy, current_version, device):
+def maybe_hotswap_residual_head(mailbox, fast_policy, current_version, device, lag_ref=None):
     """새 head 가중치가 있으면 fast_policy 에 로드(head+normalizer+선택 force_encoder만).
-    slow(frozen)는 안 건드린다. 새 버전 번호 반환."""
+    slow(frozen)는 안 건드린다. 새 버전 번호 반환.
+
+    lag_ref: 길이 1 리스트. payload 에 지연 모델(α)이 실려 오면 여기에 넣어준다.
+      head 는 '사람이 실제로 만든 변위 e'(achieved 공간)를 예측하므로, 명령으로 얹으려면
+      δ = α⁻¹·e 로 환산해야 한다. 근거: online_learning/lag_model.py"""
     latest = mailbox.get_latest_weight_version()
     if latest is None or latest == current_version:
         return current_version
@@ -115,6 +124,14 @@ def maybe_hotswap_residual_head(mailbox, fast_policy, current_version, device):
               f"{str(e).splitlines()[0]})")
         return current_version
     fast_policy.eval().to(device)
+    if lag_ref is not None:
+        lg = lag_model.from_payload(payload.get("lag"))
+        lag_ref[0] = lg
+        if lg is not None:
+            print(f"[Actor] 지연 모델 수신 — {lag_model.describe(lg)}")
+        else:
+            print("[Actor][WARN] payload 에 지연 모델 없음 → head 출력을 명령 공간으로 "
+                  "환산하지 않고 그대로 사용(구버전 learner).")
     print(f"[Actor] head hot-swap v{current_version} -> v{latest} "
           f"(learner demo={payload.get('num_demos', '?')})")
     return latest
@@ -152,12 +169,16 @@ def _to_uint8_image(img):
 @click.option('--max_duration', '-md', default=60, type=float, help='에피소드 최대 길이(초).')
 @click.option('--frequency', '-f', default=10.0, type=float, help='제어 주기(Hz).')
 @click.option('--num_inference_steps', '-ni', default=12, type=int, help='slow DDIM 스텝 수.')
+@click.option('--residual_gain_scale', default=1.0, type=float,
+              help='명령 공간 환산 게인 배율. head 출력 e(실측 변위) -> δ = scale·α⁻¹·e. '
+                   '1.0 = 시연과 같은 속도로 재현. 초기 라운드엔 0.3~0.5 로 낮춰 안전하게 시작.')
 @click.option('--residual_translation_cap', default=0.05, type=float, help='[VERIFY] residual 병진 캡(m).')
 @click.option('--residual_rotation_cap', default=0.4, type=float, help='[VERIFY] residual 회전 캡(rad).')
 @click.option('--use_hand/--no_use_hand', default=True, help='오른손 7-DoF 관측·행동(16D base). 개입 중에도 손은 base 자율.')
 @click.option('--record_wrist_wrench/--no_record_wrist_wrench', default=True)
 def main(input, output, config_name, robot_ip, steps_per_inference, max_duration,
-         frequency, num_inference_steps, residual_translation_cap, residual_rotation_cap,
+         frequency, num_inference_steps, residual_gain_scale,
+         residual_translation_cap, residual_rotation_cap,
          use_hand, record_wrist_wrench):
     slow_ckpt = input if input is not None else C.SLOW_CKPT
     output_dir = output if output is not None else C.ACTOR_OUTPUT_DIR
@@ -214,6 +235,7 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
         return r
 
     weight_version = -1
+    lag_ref = [None]        # learner 가 발행한 지연 모델(α). 명령 공간 환산에 쓴다.
 
     with SharedMemoryManager() as shm_manager:
         with DualarmRealEnv(
@@ -235,7 +257,7 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
                 assert slow_res["action"].shape[-1] == action_dim, \
                     f"slow action dim {slow_res['action'].shape[-1]} != {action_dim}"
                 del slow_res
-            print("[Actor] 준비 완료. a=개입시작(밀기) b=개입종료 | s=유지+전송 d=폐기 q=종료")
+            print("[Actor] 준비 완료. a=개입시작(밀기) b=개입종료 | s 또는 c=유지+전송 d=폐기 q=종료")
             print("[Actor] servo/manus 불필요 — 팔은 임피던스로 계속 base 실행, 손은 base 자율.")
 
             # 개입 여부 토글 (제어를 넘기지 않음 — label + fresh-slow 만 전환)
@@ -253,7 +275,7 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
                     if intervening:
                         intervening = False
                         print("[Actor] ■ 개입 종료 (nominal 복귀).")
-                elif key in ('s', 'S'):
+                elif key in ('s', 'S', 'c', 'C'):   # c = 놀던 페달 -> 전송(s 와 동일)
                     return 'keep'
                 elif key in ('d', 'D'):
                     return 'discard'
@@ -265,7 +287,8 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
             try:
                 while True:
                     # ── 에피소드 시작 전 head hot-swap ──
-                    weight_version = maybe_hotswap_residual_head(mailbox, fast_policy, weight_version, device)
+                    weight_version = maybe_hotswap_residual_head(
+                        mailbox, fast_policy, weight_version, device, lag_ref=lag_ref)
                     head_ready = _fast_head_ready(fast_policy)
                     if not head_ready:
                         print("[Actor] 학습된 residual head 아직 없음 → 이번 에피소드는 slow-only 실행 + "
@@ -332,9 +355,17 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
                             with torch.no_grad():
                                 residual6 = fast_policy.predict_action(
                                     _to_torch_obs(fast_obs_np, device))["action"][0, 0].cpu().numpy()
+                            residual_pred6 = np.asarray(residual6, dtype=np.float64).copy()  # 원 출력(e)
+                            # head 는 '사람이 실제로 만든 변위 e'(achieved 공간)를 낸다.
+                            # 명령으로 얹으려면 δ = scale·α⁻¹·e 로 환산해야 그 변위가 실제로
+                            # 만들어진다(임피던스라 명령의 α 만 도달). 캡은 환산 후에 건다.
+                            if lag_ref[0] is not None:
+                                residual6 = lag_model.to_command(
+                                    residual6, lag_ref[0], gain_scale=residual_gain_scale)
                             residual6 = cap_residual(residual6)
                         else:
                             residual6 = np.zeros(6, dtype=np.float64)
+                            residual_pred6 = np.zeros(6, dtype=np.float64)
                         final_pose9 = apply_residual_action_to_pose9(slow_pose9, residual6)
                         if slow_hand is not None:
                             final_action = np.concatenate([final_pose9, slow_hand]).astype(np.float64)
@@ -359,6 +390,10 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
                             "wrench_wrist_R": np.asarray(obs["wrench_wrist_R"])[-1].astype(np.float32),
                             "slow_pred_target_abs": slow_pose9.astype(np.float32),
                             "is_intervention": np.float32(1.0 if intervening else 0.0),
+                            # head 원 출력 e(achieved 공간, 게인·캡 전) 와 실제로 얹은 명령
+                            # delta(게인·캡 후). 둘을 나눠 둬야 게인 튜닝 효과를 사후 분석할 수 있다.
+                            "residual_pred6": residual_pred6.astype(np.float32),
+                            "residual_cmd6": residual6.astype(np.float32),
                         })
                         slow_step += 1
 
@@ -395,11 +430,13 @@ def main(input, output, config_name, robot_ip, steps_per_inference, max_duration
                         try:
                             ep = {k: np.stack([f[k] for f in frames], axis=0) for k in EPISODE_KEYS}
                             n_int = int((ep["is_intervention"] > 0.5).sum())
+                            _hn = float(np.linalg.norm(ep["residual_cmd6"][:, :3], axis=1).mean()) * 1000
                             out = write_residual_episode_hdf5(
                                 os.path.join(C.ONLINE_WORKDIR, "last_episode.hdf5"), ep, demo_name="demo_0")
                             mailbox.send_episode(out)
                             print(f"[Actor] residual 에피소드 전송: {out} "
-                                  f"({len(frames)} frames, 개입 {n_int})")
+                                  f"({len(frames)} frames, 개입 {n_int}, "
+                                  f"head 명령 평균 {_hn:.2f}mm, gain={residual_gain_scale})")
                         except Exception as e:
                             print(f"[Actor] 전송 실패: {e}")
                     elif keep:

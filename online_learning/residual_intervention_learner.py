@@ -34,6 +34,7 @@ import torch
 from torch.utils.data import WeightedRandomSampler
 
 from online_learning import config_residual_intervention as IC
+from online_learning import lag_model
 from online_learning.residual_teleop_learner import ResidualOnlineLearner
 
 
@@ -73,7 +74,45 @@ class ResidualInterventionLearner(ResidualOnlineLearner):
 
     def __init__(self, cfg=None):
         super().__init__(cfg=cfg if cfg is not None else IC)
+        self.lag = None   # 매 학습 라운드마다 accumulated 로 다시 적합
 
+    # ── 학습 타깃에서 추종지연 제거 ────────────────────────────────────────────
+    def _build_dataset(self, overrides=None):
+        """raw residual 대신 **지연 제거된 교정 성분**을 타깃으로 학습한다.
+
+        raw residual = T_base⁻¹·T_achieved(t+1) 의 대부분은 사람 교정이 아니라 임피던스
+        추종지연(≈ (α−I)·base_action_rel)이다. base_action_rel 은 head 의 입력이라
+        그대로 두면 head 가 그 자명한 사상을 배우고, 추론 시 명령 스텝이 α 배로 줄어
+        팔이 느려진다. 그래서 라운드마다 accumulated 의 nominal 프레임으로 α 를 다시
+        적합해 지연을 걷어낸 뒤 그 값을 타깃으로 쓴다. 자세한 근거: lag_model.py
+
+        α⁻¹(명령 공간 환산)은 여기서 곱하지 않는다 — actor 게인으로 넘긴다(_publish).
+        """
+        if getattr(self.C, "REMOVE_LAG", True):
+            try:
+                self.lag = lag_model.fit_and_write_hdf5(
+                    self.accumulated_hdf5,
+                    zero_nominal=bool(getattr(self.C, "ZERO_NOMINAL", True)))
+            except Exception as e:
+                self.lag = None
+                print(f"{self.tag}[WARN] 지연 모델 적합 실패 → raw residual 로 학습: {e}")
+            if self.lag is not None:
+                print(f"{self.tag} 지연 제거: {lag_model.describe(self.lag)}")
+            elif self.lag is None:
+                print(f"{self.tag}[WARN] 지연 제거 스킵 → raw residual 로 학습")
+
+        # 지연 제거가 됐으면 **처음부터** 그 타깃으로 데이터셋을 짓는다(두 번 빌드하면
+        # 이미지 전체를 메모리에 두 번 올리게 된다 — 31 에피소드면 1GB 단위 낭비).
+        ov = dict(overrides or {})
+        if self.lag is not None:
+            ov["action_key"] = f"obs/{lag_model.CORRECTION_KEY}"
+        return super()._build_dataset(overrides=ov or None)
+
+    # ── 발행 payload 에 지연 모델 동봉 (actor 가 α⁻¹ 게인으로 사용) ─────────────
+    def _extra_payload(self):
+        return {"lag": lag_model.to_payload(self.lag) if self.lag is not None else None}
+
+    # ── 개입 프레임 가중 샘플러 ──────────────────────────────────────────────
     def _make_sampler(self, dataset):
         """개입 프레임 가중 WeightedRandomSampler. is_intervention 없으면 기본 샘플러로 폴백."""
         rb = dataset.replay_buffer

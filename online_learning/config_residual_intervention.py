@@ -69,4 +69,11 @@ CORRECTION_START_HORIZON = int(os.environ.get("INTERVENTION_CORRECTION_START_HOR
 # residual head EMA (작아서 이득 적지만 옵션 유지)
 USE_EMA = os.environ.get("RESIDUAL_INTERVENTION_USE_EMA", "1") == "1"
 
+# 학습 타깃에서 임피던스 추종지연을 걷어낼지(online_learning/lag_model.py). 끄면 raw residual.
+REMOVE_LAG = os.environ.get("RESIDUAL_INTERVENTION_REMOVE_LAG", "1") == "1"
+# 개입하지 않은 프레임의 타깃을 정확히 0 으로 강제할지. CR-DAgger 전제("개입 안 함 = base 가
+# 옳음")를 그대로 라벨에 반영한다. 끄면 지연 제거 후 잔차(노이즈)를 head 가 맞추려 들어
+# nominal 구간에서도 계속 명령을 낸다.
+ZERO_NOMINAL = os.environ.get("RESIDUAL_INTERVENTION_ZERO_NOMINAL", "1") == "1"
+
 SEND_TRANSITIONS = True

@@ -8,4 +8,4 @@ export RESIDUAL_INTERVENTION_WORKDIR=/home/vision/rush_diffusion_policy/data/onl
 # (선택) 개입 프레임 가중 배수. 기본 5.0.
 # export INTERVENTION_SAMPLE_WEIGHT=5.0
 cd /home/vision/rush_diffusion_policy
-exec /home/vision/venv_diffusion/bin/python online_learning/residual_intervention_learner.py
+exec /home/vision/venv_diffusion/bin/python online_learning/residual_intervention_learner.py "$@"

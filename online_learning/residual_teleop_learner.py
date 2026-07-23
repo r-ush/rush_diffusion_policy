@@ -120,10 +120,14 @@ class ResidualOnlineLearner:
         print(f"{self.tag} 에피소드 추가 (+{n}), 누적 demo={self.num_demos}")
 
     # ── 데이터셋 ──────────────────────────────────────────────────────────────
-    def _build_dataset(self):
+    def _build_dataset(self, overrides=None):
+        """overrides: 데이터셋 cfg 를 덮어쓸 항목(예: 개입 판의 action_key 교체).
+        서브클래스가 데이터셋을 두 번 만들지 않고 한 번에 원하는 타깃으로 짓게 하는 훅."""
         ds_cfg = OmegaConf.to_container(self.cfg.task.dataset, resolve=True)
         ds_cfg["dataset_path"] = self.accumulated_hdf5
         ds_cfg["val_ratio"] = 0.0
+        if overrides:
+            ds_cfg.update(overrides)
         target = ds_cfg.pop("_target_")
         cls = hydra.utils.get_class(target)
         sig = inspect.signature(cls.__init__)
@@ -182,6 +186,11 @@ class ResidualOnlineLearner:
         self._status("published", last_loss=avg, round_time_s=round(time.time() - t0, 1))
 
     # ── 가중치 발행 (head + normalizer 만) ──────────────────────────────────────
+    def _extra_payload(self):
+        """발행 payload 에 덧붙일 항목(서브클래스 훅). 개입형은 지연 모델(α)을 실어
+        actor 가 α⁻¹ 게인으로 쓰게 한다."""
+        return {}
+
     def _publish(self):
         payload = {
             "version": self.version,
@@ -193,6 +202,7 @@ class ResidualOnlineLearner:
         if self.policy.train_force_encoder and self.policy.force_encoder is not None:
             payload["force_encoder_state"] = {
                 k: v.detach().cpu() for k, v in self.policy.force_encoder.state_dict().items()}
+        payload.update(self._extra_payload())
         self.mailbox.publish_weights(payload)
         self.version += 1
 

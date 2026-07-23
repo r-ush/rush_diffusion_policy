@@ -490,11 +490,27 @@ DATA.episodes.forEach((e,i)=>{
   tabs.appendChild(b);
 });
 
-const base3d=(rng)=>({paper_bgcolor:paper,plot_bgcolor:paper,font:{color:fg},showlegend:false,
-  margin:{l:0,r:0,t:4,b:0},scene:{aspectmode:rng?'cube':'data',
-  xaxis:{gridcolor:grid,color:fg,title:'x',range:rng&&rng[0]},
-  yaxis:{gridcolor:grid,color:fg,title:'y',range:rng&&rng[1]},
-  zaxis:{gridcolor:grid,color:fg,title:'z',range:rng&&rng[2]}}});
+// uirevision: 값이 그대로면 Plotly 가 사용자가 만든 UI 상태(3D 카메라=회전/줌/팬)를
+// react 로 다시 그려도 유지한다. plotB 는 매 프레임 react 되므로 이게 없으면 재생·슬라이더
+// 이동마다 시점이 초기값으로 돌아간다. 축 range 는 사용자가 만진 게 아니면 계속 갱신되므로
+// 프레임별 국소 스케일(R)은 그대로 반영된다. 시점을 되돌리려면 모드바의 home(축 초기화).
+// 시점(3D 카메라) 유지.
+//   plotB 는 매 프레임 Plotly.react 로 다시 그려지므로, 새 layout 에 카메라를 안 실어 보내면
+//   재생·슬라이더 이동마다 기본 시점(1.25,1.25,1.25)으로 돌아간다. uirevision 만으로는
+//   부족해서(사용자 드래그가 아닌 경로에선 복원 안 됨) **현재 카메라를 읽어 명시적으로 다시
+//   넣는다**. 시점을 되돌리려면 모드바의 home(축 초기화) 버튼.
+const camOf=(id)=>{const g=document.getElementById(id);
+  const sc=g&&(g._fullLayout&&g._fullLayout.scene||g.layout&&g.layout.scene);
+  return sc&&sc.camera?JSON.parse(JSON.stringify(sc.camera)):null;};
+const base3d=(rng,id)=>{
+  const lay={paper_bgcolor:paper,plot_bgcolor:paper,font:{color:fg},showlegend:false,
+    uirevision:'keep',
+    margin:{l:0,r:0,t:4,b:0},scene:{aspectmode:rng?'cube':'data',uirevision:'keep',
+    xaxis:{gridcolor:grid,color:fg,title:'x',range:rng&&rng[0]},
+    yaxis:{gridcolor:grid,color:fg,title:'y',range:rng&&rng[1]},
+    zaxis:{gridcolor:grid,color:fg,title:'z',range:rng&&rng[2]}}};
+  const c=id&&camOf(id); if(c) lay.scene.camera=c;
+  return lay;};
 const cfg={responsive:true,displaylogo:false};
 
 // Panel A trace 배치: 각 경로마다 [faint 전체선, 자라는 trail, 현재 마커] 3개.
@@ -514,7 +530,7 @@ function drawStaticA(i){
     traces.push({type:'scatter3d',mode:'markers',x:IP.map(p=>p[0]),y:IP.map(p=>p[1]),z:IP.map(p=>p[2]),
       marker:{color:C.warn,size:2.5},opacity:.85,hoverinfo:'skip'});
   }
-  Plotly.react('plotA',traces,base3d(null),cfg);
+  Plotly.react('plotA',traces,base3d(null,'plotA'),cfg);
 }
 function drawTimeline(i){
   const e=DATA.episodes[i];
@@ -527,13 +543,38 @@ function drawTimeline(i){
     x0:a-0.5,x1:b+0.5,y0:0,y1:1,fillcolor:'rgba(255,93,93,0.13)',line:{width:0},layer:'below'}));
   Plotly.react('timeline',tlTraces,
     {paper_bgcolor:paper,plot_bgcolor:paper,font:{color:fg},margin:{l:44,r:12,t:6,b:34},
+     uirevision:'keep',
      legend:{orientation:'h',x:0,y:1.18},xaxis:{gridcolor:grid,color:fg,title:'frame'},
      yaxis:{gridcolor:grid,color:fg,title:'cm'},shapes},cfg);
+}
+// Panel B 는 **에피소드당 한 번만** 생성한다(축척도 에피소드 전체 고정).
+//   예전: 매 프레임 R 을 새로 잡아 Plotly.react -> (a) 레이아웃이 새로 들어가 3D 시점이
+//   초기화되고, (b) 벡터가 늘 상자를 꽉 채워 크기 변화가 안 보이며 축척이 매 프레임 널뛰었다.
+//   지금: 생성은 1회, 매 프레임은 restyle(좌표만) -> 레이아웃을 안 건드리니 시점이 유지되고
+//   축척이 고정돼 벡터 길이가 곧 교정 크기로 읽힌다.
+let RB=1.5;
+function drawStaticB(i){
+  const e=DATA.episodes[i];
+  let mx=1.5;
+  for(let f=0;f<e.n;f++){
+    const o=xf(e.achieved[f]);
+    const cm=p=>{const w=xf(p);return [(w[0]-o[0])*100,(w[1]-o[1])*100,(w[2]-o[2])*100];};
+    [cm(e.slow[f]),cm(e.human[f])].concat(e.has_head?[cm(e.head[f])]:[])
+      .forEach(v=>v.forEach(x=>{const a=Math.abs(x); if(a>mx) mx=a;}));
+  }
+  RB=mx*1.15;
+  const seg0=(c,w)=>({type:'scatter3d',mode:'lines+markers',x:[0,0],y:[0,0],z:[0,0],
+    line:{color:c,width:w},marker:{color:c,size:[3,7]},hoverinfo:'skip'});
+  const traces=[{type:'scatter3d',mode:'markers',x:[0],y:[0],z:[0],
+      marker:{color:C.achv,size:6},hoverinfo:'skip'},
+    seg0(C.slow,3),seg0(C.human,6)];
+  if(e.has_head) traces.push(seg0(C.head,6));
+  Plotly.react('plotB',traces,base3d([[-RB,RB],[-RB,RB],[-RB,RB]],'plotB'),cfg);
 }
 function selectEp(i){
   cur=i;frame=0;const e=DATA.episodes[i];
   const sl=document.getElementById('slider');sl.max=e.n-1;sl.value=0;
-  drawStaticA(i);drawTimeline(i);update(0);
+  drawStaticA(i);drawStaticB(i);drawTimeline(i);update(0);
 }
 
 function update(f){
@@ -547,14 +588,10 @@ function update(f){
   if(e.has_head) upd(e.head,7,8);
   const o=xf(e.achieved[f]),cm=p=>{const w=xf(p);return [(w[0]-o[0])*100,(w[1]-o[1])*100,(w[2]-o[2])*100];};
   const S=cm(e.slow[f]),H=cm(e.human[f]),D=e.has_head?cm(e.head[f]):null;
-  const seg=(v,c,w)=>({type:'scatter3d',mode:'lines+markers',x:[0,v[0]],y:[0,v[1]],z:[0,v[2]],
-     line:{color:c,width:w},marker:{color:c,size:[3,7]},hoverinfo:'skip'});
   const vecs=[S,H].concat(D?[D]:[]);
-  const R=Math.max(1.5,...vecs.flatMap(v=>v.map(Math.abs)))*1.2;
-  const traces=[{type:'scatter3d',mode:'markers',x:[0],y:[0],z:[0],marker:{color:C.achv,size:6},hoverinfo:'skip'},
-    seg(S,C.slow,3),seg(H,C.human,6)];
-  if(D) traces.push(seg(D,C.head,6));
-  Plotly.react('plotB',traces,base3d([[-R,R],[-R,R],[-R,R]]),cfg);
+  // 좌표만 restyle — layout(따라서 카메라/축척)은 건드리지 않는다.
+  Plotly.restyle('plotB',{x:vecs.map(v=>[0,v[0]]),y:vecs.map(v=>[0,v[1]]),z:vecs.map(v=>[0,v[2]])},
+    vecs.map((_,k)=>k+1));
   Plotly.relayout('timeline',{'shapes[0].x0':f,'shapes[0].x1':f});
   // HUD
   const gt=e.gt_norm[f];
@@ -585,7 +622,7 @@ const frbase=document.getElementById('frbase'),frworld=document.getElementById('
 frworld.textContent='world 기준 (X '+DATA.summary.world_rot_x_deg+'°)';
 document.getElementById('frnote').textContent='world = Rx('+DATA.summary.world_rot_x_deg+'°)·base · 평행이동 생략(상대 기하 동일)';
 function setFrame(fr){FRAME=fr;frbase.className='tab'+(fr==='base'?' on':'');
-  frworld.className='tab'+(fr==='world'?' on':'');drawStaticA(cur);update(frame);}
+  frworld.className='tab'+(fr==='world'?' on':'');drawStaticA(cur);drawStaticB(cur);update(frame);}
 frbase.onclick=()=>setFrame('base');
 frworld.onclick=()=>setFrame('world');
 
@@ -602,6 +639,9 @@ document.getElementById('speed').onchange=()=>{if(timer){stop();play();}};
 document.getElementById('timeline').addEventListener('plotly_click',ev=>{stop();update(Math.round(ev.points[0].x));});
 
 selectEp(0);
+// 기본 좌표계 = world. 로봇 base 가 X축으로 기울어져 있어 base 기준 그대로 보면 축이 누워
+// 보인다. intervention_report.html 도 world 기본이라, 두 파일을 나란히 볼 때 같은 방향이 된다.
+setFrame('world');
 </script>
 </div></body></html>"""
 
