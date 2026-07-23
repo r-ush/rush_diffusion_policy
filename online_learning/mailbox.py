@@ -58,6 +58,16 @@ class FileMailbox:
         if os.path.exists(ready):
             os.replace(ready, done)
 
+    def list_all_episodes(self):
+        """전송 완료된(.ready 또는 .done 마커가 있는) 모든 ep_*.hdf5 경로를 번호 순으로.
+        learner 재시작 시 처리 여부와 무관하게 전체 버퍼를 복원하기 위한 것(restart-safe)."""
+        paths = []
+        for hdf5 in sorted(glob.glob(os.path.join(self.transitions_dir, "ep_*.hdf5"))):
+            base = hdf5[:-len(".hdf5")]
+            if os.path.exists(base + ".ready") or os.path.exists(base + ".done"):
+                paths.append(hdf5)
+        return paths
+
     # ── learner -> actor : 가중치 ───────────────────────────────────────────
     def publish_weights(self, payload: dict, keep_last=2):
         """payload(dict, 예: {'state_dict':..., 'version':N})를 저장하고 latest.txt 갱신."""

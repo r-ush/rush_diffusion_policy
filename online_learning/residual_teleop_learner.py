@@ -216,15 +216,45 @@ class ResidualOnlineLearner:
         print(f"{self.tag} 업데이트 대기 (신규 {new_since} < EVERY_N={every_n})")
         return False
 
+    # ── restart-safe 버퍼 복원 (workflow B: 수집 후/재시작 실행) ───────────────────
+    def _rebuild_from_disk(self):
+        """transitions/ 의 모든 에피소드(.done 포함)로 accumulated 버퍼와 num_demos 를 복원.
+        learner 를 껐다 켜도(수집 먼저→학습 나중, 배치마다 재시작) 이전 데이터를 잃지 않는다.
+        __init__ 이 accumulated 를 비운 직후 호출된다."""
+        eps = self.mailbox.list_all_episodes()
+        if not eps:
+            return
+        for ep in eps:
+            try:
+                self.add_episode(ep)
+                self.mailbox.mark_episode_done(ep)   # .ready 였으면 done 처리(poll 재수집 방지)
+            except Exception as e:
+                print(f"{self.tag} 재수집 실패 {ep}: {e}")
+        print(f"{self.tag} 디스크에서 {self.num_demos}개 에피소드 버퍼 복원(restart-safe)")
+
     # ── 메인 루프 ──────────────────────────────────────────────────────────────
     def run(self):
-        # 시작 시 (아직 학습 전) head 를 v0 로 발행해 actor 가 즉시 slow+random-residual 로 시작
-        self._publish()
+        # restart-safe: 디스크의 전체 에피소드로 버퍼 복원 (workflow B).
+        self._rebuild_from_disk()
+        # 가중치 발행: 콜드 스타트만 빈 v0 발행(actor 부트스트랩 → slow-only).
+        # 이미 발행된 head 가 있으면(재시작) 그대로 두고 버전만 이어받아, 재학습 완료 전까지
+        # 기존(학습된) head 를 유지한다 — 빈 head 로 덮어써 actor 를 퇴보시키지 않기 위함.
+        latest = self.mailbox.get_latest_weight_version()
+        if latest is None:
+            self._publish()
+        else:
+            self.version = latest + 1
+            print(f"{self.tag} 재시작: 기존 head v{latest} 유지 → 다음 발행 v{self.version}")
         self._trained_once = False
         self._demos_at_last_train = 0
         print(f"{self.tag} actor 의 에피소드를 대기합니다 (첫 학습까지 "
               f"{getattr(self.C, 'FIRST_TRAIN_EPISODES', self.C.MIN_EPISODES_BEFORE_TRAIN)}개, "
               f"이후 {getattr(self.C, 'UPDATE_EVERY_N_EPISODES', 1)}개마다) ...")
+        # 재시작 시 이미 충분히 쌓여 있으면(workflow B) 즉시 한 번 학습.
+        if self._should_train():
+            self.train_round()
+            self._trained_once = True
+            self._demos_at_last_train = self.num_demos
         while True:
             new_eps = self.mailbox.poll_new_episodes()
             if new_eps:
